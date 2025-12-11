@@ -1,0 +1,31 @@
+# 日志管理器配置文件
+server:
+  # 服务器监听地址
+  host: "0.0.0.0"
+  # 服务器监听端口
+  port: 8080
+
+database:
+  # 数据库类型: sqlite, postgres, mysql
+  type: "sqlite"
+  # 数据库连接字符串（SQLite 使用文件路径）
+  dsn: "./log_manager.db"
+
+# 日志保留天数（0 表示永久保留）
+log_retention_days: 30
+
+# CORS 配置
+cors:
+  enabled: true
+  allow_origins:
+    - "http://localhost:3000"
+    - "http://127.0.0.1:3000"
+  allow_methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+  allow_headers:
+    - Content-Type
+    - Authorization
