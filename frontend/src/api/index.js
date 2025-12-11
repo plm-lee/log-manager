@@ -71,6 +71,19 @@ const metricsApi = {
   },
 
   /**
+   * 查询指标统计数据（用于图表展示）
+   * @param {Object} params - 查询参数
+   * @param {string} params.tag - 标签筛选
+   * @param {number} params.start_time - 开始时间戳
+   * @param {number} params.end_time - 结束时间戳
+   * @param {string} params.interval - 聚合间隔：1m, 5m, 15m, 1h, 1d（默认1h）
+   * @returns {Promise} 响应数据
+   */
+  queryMetricsStats: (params) => {
+    return api.get('/metrics/stats', { params });
+  },
+
+  /**
    * 接收指标数据（通常由 log-filter-monitor 调用）
    * @param {Object} data - 指标数据
    * @returns {Promise} 响应数据

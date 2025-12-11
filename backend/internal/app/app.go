@@ -101,6 +101,7 @@ func (a *App) initRouter() {
 			metrics.POST("", metricsHandler.ReceiveMetrics)            // 接收指标
 			metrics.POST("/batch", metricsHandler.BatchReceiveMetrics) // 批量接收指标
 			metrics.GET("", metricsHandler.QueryMetrics)               // 查询指标
+			metrics.GET("/stats", metricsHandler.QueryMetricsStats)    // 查询指标统计（用于图表）
 		}
 	}
 

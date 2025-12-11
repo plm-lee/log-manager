@@ -441,3 +441,138 @@ func (h *MetricsHandler) QueryMetrics(c *gin.Context) {
 		TotalPage: totalPage,
 	})
 }
+
+// QueryMetricsStatsRequest 查询指标统计请求结构体
+// 用于图表展示，按时间聚合指标数据
+type QueryMetricsStatsRequest struct {
+	Tag       string `form:"tag"`        // 标签筛选
+	StartTime int64  `form:"start_time"` // 开始时间戳
+	EndTime   int64  `form:"end_time"`   // 结束时间戳
+	Interval  string `form:"interval"`   // 聚合间隔：1m, 5m, 15m, 1h, 1d（默认1h）
+}
+
+// MetricsStatsData 指标统计数据
+type MetricsStatsData struct {
+	Time       int64            `json:"time"`        // 时间戳
+	TimeStr    string           `json:"time_str"`    // 时间字符串
+	TotalCount int64            `json:"total_count"` // 总计数
+	RuleCounts map[string]int64 `json:"rule_counts"` // 规则计数
+}
+
+// QueryMetricsStatsResponse 查询指标统计响应结构体
+type QueryMetricsStatsResponse struct {
+	Stats []MetricsStatsData `json:"stats"` // 统计数据列表
+}
+
+// QueryMetricsStats 查询指标统计数据（用于图表展示）
+// 按时间间隔聚合指标数据，支持图表展示
+func (h *MetricsHandler) QueryMetricsStats(c *gin.Context) {
+	var req QueryMetricsStatsRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "请求参数错误",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	// 设置默认值
+	if req.Interval == "" {
+		req.Interval = "1h" // 默认1小时
+	}
+	if req.StartTime == 0 {
+		// 默认查询最近24小时
+		req.StartTime = time.Now().Add(-24 * time.Hour).Unix()
+	}
+	if req.EndTime == 0 {
+		req.EndTime = time.Now().Unix()
+	}
+
+	// 解析时间间隔（秒）
+	var intervalSec int64
+	switch req.Interval {
+	case "1m":
+		intervalSec = 60
+	case "5m":
+		intervalSec = 300
+	case "15m":
+		intervalSec = 900
+	case "1h":
+		intervalSec = 3600
+	case "1d":
+		intervalSec = 86400
+	default:
+		intervalSec = 3600 // 默认1小时
+	}
+
+	// 构建查询
+	query := h.db.Model(&models.MetricsEntry{})
+
+	// 应用筛选条件
+	if req.Tag != "" {
+		query = query.Where("tag = ?", req.Tag)
+	}
+	query = query.Where("timestamp >= ?", req.StartTime)
+	query = query.Where("timestamp <= ?", req.EndTime)
+
+	// 查询所有符合条件的指标
+	var metrics []models.MetricsEntry
+	if err := query.Order("timestamp ASC").Find(&metrics).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "查询指标失败",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	// 按时间间隔聚合数据
+	statsMap := make(map[int64]*MetricsStatsData)
+
+	for _, m := range metrics {
+		// 对齐时间戳到间隔
+		alignedTime := m.Timestamp - (m.Timestamp % intervalSec)
+
+		// 获取或创建统计对象
+		stat, exists := statsMap[alignedTime]
+		if !exists {
+			stat = &MetricsStatsData{
+				Time:       alignedTime,
+				TimeStr:    time.Unix(alignedTime, 0).Format("2006-01-02 15:04:05"),
+				TotalCount: 0,
+				RuleCounts: make(map[string]int64),
+			}
+			statsMap[alignedTime] = stat
+		}
+
+		// 解析规则计数
+		var ruleCounts map[string]int64
+		if err := json.Unmarshal([]byte(m.RuleCounts), &ruleCounts); err != nil {
+			ruleCounts = make(map[string]int64)
+		}
+
+		// 累加计数
+		stat.TotalCount += m.TotalCount
+		for ruleName, count := range ruleCounts {
+			stat.RuleCounts[ruleName] += count
+		}
+	}
+
+	// 转换为数组并按时间排序
+	stats := make([]MetricsStatsData, 0, len(statsMap))
+	for _, stat := range statsMap {
+		stats = append(stats, *stat)
+	}
+
+	// 按时间排序
+	for i := 0; i < len(stats)-1; i++ {
+		for j := i + 1; j < len(stats); j++ {
+			if stats[i].Time > stats[j].Time {
+				stats[i], stats[j] = stats[j], stats[i]
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, QueryMetricsStatsResponse{
+		Stats: stats,
+	})
+}

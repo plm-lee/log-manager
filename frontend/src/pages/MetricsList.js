@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Table,
   Card,
@@ -12,8 +12,17 @@ import {
   Row,
   Col,
   Descriptions,
+  Switch,
+  Radio,
+  Statistic,
 } from 'antd';
-import { SearchOutlined, ReloadOutlined } from '@ant-design/icons';
+import {
+  SearchOutlined,
+  ReloadOutlined,
+  PlayCircleOutlined,
+  PauseCircleOutlined,
+} from '@ant-design/icons';
+import { Line } from '@ant-design/charts';
 import dayjs from 'dayjs';
 import { metricsApi, logApi } from '../api';
 
@@ -24,11 +33,16 @@ const { Text, Title } = Typography;
 /**
  * 指标列表页面组件
  * 显示指标统计数据，支持按标签、时间范围等条件查询
+ * 包含图表展示和实时刷新功能
  */
 const MetricsList = () => {
   const [metrics, setMetrics] = useState([]);
+  const [stats, setStats] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [statsLoading, setStatsLoading] = useState(false);
   const [tags, setTags] = useState([]);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const refreshTimerRef = useRef(null);
   const [pagination, setPagination] = useState({
     current: 1,
     pageSize: 20,
@@ -40,6 +54,7 @@ const MetricsList = () => {
     tag: undefined,
     start_time: undefined,
     end_time: undefined,
+    interval: '1h', // 默认1小时聚合
   });
 
   // 加载标签列表
@@ -52,6 +67,29 @@ const MetricsList = () => {
     }
   };
 
+  // 加载指标统计数据（用于图表）
+  const loadMetricsStats = async () => {
+    setStatsLoading(true);
+    try {
+      const params = {
+        ...filters,
+      };
+
+      // 移除空值
+      Object.keys(params).forEach(
+        (key) => params[key] === undefined && delete params[key]
+      );
+
+      const response = await metricsApi.queryMetricsStats(params);
+      setStats(response.data.stats || []);
+    } catch (error) {
+      message.error('加载指标统计失败: ' + (error.message || '未知错误'));
+      console.error('加载指标统计失败:', error);
+    } finally {
+      setStatsLoading(false);
+    }
+  };
+
   // 加载指标数据
   const loadMetrics = async (page = 1, pageSize = 20) => {
     setLoading(true);
@@ -59,7 +97,9 @@ const MetricsList = () => {
       const params = {
         page,
         page_size: pageSize,
-        ...filters,
+        tag: filters.tag,
+        start_time: filters.start_time,
+        end_time: filters.end_time,
       };
 
       // 移除空值
@@ -93,12 +133,35 @@ const MetricsList = () => {
   useEffect(() => {
     loadTags();
     loadMetrics();
+    loadMetricsStats();
   }, []);
+
+  // 自动刷新
+  useEffect(() => {
+    if (autoRefresh) {
+      refreshTimerRef.current = setInterval(() => {
+        loadMetricsStats();
+        loadMetrics(pagination.current, pagination.pageSize);
+      }, 5000); // 每5秒刷新一次
+    } else {
+      if (refreshTimerRef.current) {
+        clearInterval(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+    }
+
+    return () => {
+      if (refreshTimerRef.current) {
+        clearInterval(refreshTimerRef.current);
+      }
+    };
+  }, [autoRefresh, pagination.current, pagination.pageSize]);
 
   // 处理查询
   const handleSearch = () => {
     setPagination({ ...pagination, current: 1 });
     loadMetrics(1, pagination.pageSize);
+    loadMetricsStats();
   };
 
   // 处理重置
@@ -107,10 +170,12 @@ const MetricsList = () => {
       tag: undefined,
       start_time: undefined,
       end_time: undefined,
+      interval: '1h',
     });
     setPagination({ ...pagination, current: 1 });
     setTimeout(() => {
       loadMetrics(1, pagination.pageSize);
+      loadMetricsStats();
     }, 100);
   };
 
@@ -130,6 +195,154 @@ const MetricsList = () => {
       });
     }
   };
+
+  // 处理聚合间隔变化
+  const handleIntervalChange = (e) => {
+    setFilters({
+      ...filters,
+      interval: e.target.value,
+    });
+  };
+
+  // 准备图表数据
+  const prepareChartData = () => {
+    if (!stats || stats.length === 0) {
+      return [];
+    }
+
+    // 收集所有规则名称
+    const ruleNames = new Set();
+    stats.forEach((stat) => {
+      Object.keys(stat.rule_counts || {}).forEach((ruleName) => {
+        ruleNames.add(ruleName);
+      });
+    });
+
+    // 构建图表数据
+    const chartData = [];
+    stats.forEach((stat) => {
+      // 总计数
+      chartData.push({
+        time: stat.time_str,
+        timestamp: stat.time,
+        type: '总计数',
+        value: stat.total_count,
+      });
+
+      // 各规则计数
+      Object.entries(stat.rule_counts || {}).forEach(([ruleName, count]) => {
+        chartData.push({
+          time: stat.time_str,
+          timestamp: stat.time,
+          type: ruleName,
+          value: count,
+        });
+      });
+    });
+
+    return chartData;
+  };
+
+  // 计算总统计
+  const calculateTotalStats = () => {
+    let totalCount = 0;
+    const ruleCounts = {};
+
+    stats.forEach((stat) => {
+      totalCount += stat.total_count || 0;
+      Object.entries(stat.rule_counts || {}).forEach(([ruleName, count]) => {
+        ruleCounts[ruleName] = (ruleCounts[ruleName] || 0) + count;
+      });
+    });
+
+    return { totalCount, ruleCounts };
+  };
+
+  const { totalCount, ruleCounts } = calculateTotalStats();
+  const chartData = prepareChartData();
+
+  // 获取所有指标类型（用于颜色映射）
+  const getMetricTypes = () => {
+    const types = new Set();
+    chartData.forEach((item) => {
+      types.add(item.type);
+    });
+    return Array.from(types);
+  };
+
+  // 定义颜色映射（为不同指标分配不同颜色）
+  const getColorConfig = () => {
+    const types = getMetricTypes();
+    const colorPalette = [
+      '#52c41a', // 绿色
+      '#faad14', // 橙色
+      '#f5222d', // 红色
+      '#722ed1', // 紫色
+      '#13c2c2', // 青色
+      '#eb2f96', // 粉色
+      '#fa8c16', // 橙红色
+      '#2f54eb', // 深蓝色
+      '#a0d911', // 浅绿色
+      '#fa541c', // 深橙色
+      '#1890ff', // 蓝色
+      '#52c41a', // 绿色
+      '#faad14', // 橙色
+      '#f5222d', // 红色
+    ];
+
+    // 构建类型到颜色的映射对象
+    const colorMap = {};
+    let colorIndex = 0;
+    
+    // 先处理总计数
+    if (types.includes('总计数')) {
+      colorMap['总计数'] = '#1890ff';
+    }
+    
+    // 再处理其他规则
+    types.forEach((type) => {
+      if (type !== '总计数') {
+        colorMap[type] = colorPalette[colorIndex % colorPalette.length];
+        colorIndex++;
+      }
+    });
+
+    // 按照 types 的顺序构建颜色数组
+    const colorArray = types.map((type) => colorMap[type] || '#1890ff');
+    
+    return { colorMap, colorArray };
+  };
+
+  const { colorArray } = getColorConfig();
+
+  // 图表配置
+  const lineConfig = {
+    data: chartData,
+    xField: 'time',
+    yField: 'value',
+    seriesField: 'type',
+    smooth: true,
+    point: {
+      size: 4,
+      shape: 'circle',
+    },
+    legend: {
+      position: 'top',
+    },
+    color: colorArray,
+    animation: {
+      appear: {
+        animation: 'wave-in',
+        duration: 2000,
+      },
+    },
+    tooltip: {
+      formatter: (datum) => {
+        return { name: datum.type, value: datum.value };
+      },
+    },
+  };
+
 
   // 表格列定义
   const columns = [
@@ -203,7 +416,7 @@ const MetricsList = () => {
       <Card title="指标查询" style={{ marginBottom: 16 }}>
         <Space direction="vertical" style={{ width: '100%' }} size="middle">
           <Row gutter={16}>
-            <Col span={8}>
+            <Col span={6}>
               <Select
                 placeholder="选择标签"
                 style={{ width: '100%' }}
@@ -226,6 +439,30 @@ const MetricsList = () => {
                 onChange={handleTimeRangeChange}
               />
             </Col>
+            <Col span={6}>
+              <Radio.Group
+                value={filters.interval}
+                onChange={handleIntervalChange}
+                buttonStyle="solid"
+              >
+                <Radio.Button value="1m">1分钟</Radio.Button>
+                <Radio.Button value="5m">5分钟</Radio.Button>
+                <Radio.Button value="15m">15分钟</Radio.Button>
+                <Radio.Button value="1h">1小时</Radio.Button>
+                <Radio.Button value="1d">1天</Radio.Button>
+              </Radio.Group>
+            </Col>
+            <Col span={4}>
+              <Space>
+                <Switch
+                  checkedChildren={<PlayCircleOutlined />}
+                  unCheckedChildren={<PauseCircleOutlined />}
+                  checked={autoRefresh}
+                  onChange={setAutoRefresh}
+                />
+                <Text>自动刷新</Text>
+              </Space>
+            </Col>
           </Row>
           <Space>
             <Button
@@ -242,6 +479,52 @@ const MetricsList = () => {
         </Space>
       </Card>
 
+      {/* 统计概览 */}
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col span={8}>
+          <Card>
+            <Statistic
+              title="总匹配数"
+              value={totalCount}
+              valueStyle={{ color: '#3f8600' }}
+            />
+          </Card>
+        </Col>
+        <Col span={16}>
+          <Card title="各规则统计">
+            <Space wrap>
+              {Object.entries(ruleCounts).map(([ruleName, count]) => (
+                <Tag key={ruleName} color="blue" style={{ fontSize: '14px', padding: '4px 12px' }}>
+                  {ruleName}: {count}
+                </Tag>
+              ))}
+              {Object.keys(ruleCounts).length === 0 && <Text type="secondary">暂无数据</Text>}
+            </Space>
+          </Card>
+        </Col>
+      </Row>
+
+      {/* 图表展示 */}
+      <Card
+        title="指标趋势图"
+        extra={
+          <Space>
+            <Text type="secondary">数据点: {stats.length}</Text>
+            {autoRefresh && <Tag color="green">实时更新中</Tag>}
+          </Space>
+        }
+        style={{ marginBottom: 16 }}
+      >
+        {chartData.length > 0 ? (
+          <Line {...lineConfig} height={400} />
+        ) : (
+          <div style={{ textAlign: 'center', padding: '40px 0' }}>
+            <Text type="secondary">暂无数据，请选择时间范围查询</Text>
+          </div>
+        )}
+      </Card>
+
+      {/* 指标列表 */}
       <Card title="指标列表">
         <Table
           columns={columns}
