@@ -29,3 +29,9 @@ cors:
   allow_headers:
     - Content-Type
     - Authorization
+
+# 请求限流配置
+rate_limit:
+  enabled: true   # 是否启用限流
+  rate: 100       # 每秒允许的请求数
+  capacity: 200   # 桶容量（突发请求数）

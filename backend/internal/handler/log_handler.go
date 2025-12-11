@@ -77,6 +77,88 @@ func (h *LogHandler) ReceiveLog(c *gin.Context) {
 	})
 }
 
+// BatchReceiveLogRequest 批量接收日志请求结构体
+// 支持一次性接收多条日志数据
+type BatchReceiveLogRequest struct {
+	Logs []ReceiveLogRequest `json:"logs" binding:"required,min=1,max=100"` // 日志列表（最多100条）
+}
+
+// BatchReceiveLogResponse 批量接收日志响应结构体
+type BatchReceiveLogResponse struct {
+	Success int   `json:"success"` // 成功数量
+	Failed  int   `json:"failed"`  // 失败数量
+	IDs     []uint `json:"ids"`     // 成功创建的ID列表
+}
+
+// BatchReceiveLog 批量接收日志数据
+// 支持一次性接收多条日志，提高吞吐量
+func (h *LogHandler) BatchReceiveLog(c *gin.Context) {
+	var req BatchReceiveLogRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "请求参数错误",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	// 限制批量大小
+	if len(req.Logs) > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "批量大小超过限制",
+			"message": "最多支持100条日志",
+		})
+		return
+	}
+
+	// 批量创建日志条目
+	logEntries := make([]models.LogEntry, 0, len(req.Logs))
+	now := time.Now()
+	for _, logReq := range req.Logs {
+		logEntries = append(logEntries, models.LogEntry{
+			Timestamp: logReq.Timestamp,
+			RuleName:  logReq.RuleName,
+			RuleDesc:  logReq.RuleDesc,
+			LogLine:   logReq.LogLine,
+			LogFile:   logReq.LogFile,
+			Pattern:   logReq.Pattern,
+			Tag:       logReq.Tag,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+	}
+
+	// 批量保存到数据库
+	var successIDs []uint
+	var successCount, failedCount int
+
+	// 使用事务批量插入
+	err := h.db.CreateInBatches(&logEntries, 50).Error
+	if err != nil {
+		// 如果批量插入失败，尝试逐条插入
+		for _, entry := range logEntries {
+			if err := h.db.Create(&entry).Error; err != nil {
+				failedCount++
+			} else {
+				successCount++
+				successIDs = append(successIDs, entry.ID)
+			}
+		}
+	} else {
+		// 批量插入成功
+		successCount = len(logEntries)
+		for _, entry := range logEntries {
+			successIDs = append(successIDs, entry.ID)
+		}
+	}
+
+	c.JSON(http.StatusOK, BatchReceiveLogResponse{
+		Success: successCount,
+		Failed:  failedCount,
+		IDs:     successIDs,
+	})
+}
+
 // QueryLogsRequest 查询日志请求结构体
 // 定义日志查询的筛选条件
 type QueryLogsRequest struct {

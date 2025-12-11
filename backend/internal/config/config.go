@@ -14,6 +14,7 @@ type Config struct {
 	Database         DatabaseConfig `yaml:"database"`          // 数据库配置
 	LogRetentionDays int            `yaml:"log_retention_days"` // 日志保留天数
 	CORS             CORSConfig     `yaml:"cors"`              // CORS 配置
+	RateLimit        RateLimitConfig `yaml:"rate_limit"`       // 限流配置
 }
 
 // ServerConfig 服务器配置结构体
@@ -26,8 +27,12 @@ type ServerConfig struct {
 // DatabaseConfig 数据库配置结构体
 // 定义数据库连接信息
 type DatabaseConfig struct {
-	Type string `yaml:"type"` // 数据库类型
-	DSN  string `yaml:"dsn"`  // 数据库连接字符串
+	Type            string `yaml:"type"`              // 数据库类型
+	DSN             string `yaml:"dsn"`               // 数据库连接字符串
+	MaxOpenConns    int    `yaml:"max_open_conns"`    // 最大打开连接数
+	MaxIdleConns    int    `yaml:"max_idle_conns"`    // 最大空闲连接数
+	ConnMaxLifetime int    `yaml:"conn_max_lifetime"` // 连接最大生存时间（秒）
+	LogLevel        string `yaml:"log_level"`         // 日志级别：silent, error, warn, info
 }
 
 // CORSConfig CORS 配置结构体
@@ -37,6 +42,14 @@ type CORSConfig struct {
 	AllowOrigins []string `yaml:"allow_origins"` // 允许的来源
 	AllowMethods []string `yaml:"allow_methods"` // 允许的 HTTP 方法
 	AllowHeaders []string `yaml:"allow_headers"` // 允许的请求头
+}
+
+// RateLimitConfig 限流配置结构体
+// 定义请求限流参数
+type RateLimitConfig struct {
+	Enabled bool `yaml:"enabled"` // 是否启用限流
+	Rate    int  `yaml:"rate"`    // 每秒允许的请求数
+	Capacity int `yaml:"capacity"` // 桶容量（可选，默认为 rate）
 }
 
 // LoadConfig 加载配置文件
@@ -67,6 +80,24 @@ func LoadConfig(filePath string) (*Config, error) {
 	}
 	if cfg.Database.DSN == "" {
 		cfg.Database.DSN = "./log_manager.db"
+	}
+	if cfg.Database.MaxOpenConns <= 0 {
+		cfg.Database.MaxOpenConns = 25 // 默认最大打开连接数
+	}
+	if cfg.Database.MaxIdleConns <= 0 {
+		cfg.Database.MaxIdleConns = 5 // 默认最大空闲连接数
+	}
+	if cfg.Database.ConnMaxLifetime <= 0 {
+		cfg.Database.ConnMaxLifetime = 300 // 默认5分钟
+	}
+	if cfg.Database.LogLevel == "" {
+		cfg.Database.LogLevel = "info" // 默认日志级别
+	}
+	if cfg.RateLimit.Rate <= 0 {
+		cfg.RateLimit.Rate = 100 // 默认每秒100个请求
+	}
+	if cfg.RateLimit.Capacity <= 0 {
+		cfg.RateLimit.Capacity = cfg.RateLimit.Rate // 默认容量等于速率
 	}
 
 	return &cfg, nil

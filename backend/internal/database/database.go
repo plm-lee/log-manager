@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"time"
 
 	"log-manager/internal/config"
 	"log-manager/internal/models"
@@ -29,12 +30,40 @@ func Init(cfg *config.DatabaseConfig) error {
 		return fmt.Errorf("不支持的数据库类型: %s", cfg.Type)
 	}
 
+	// 解析日志级别
+	var logLevel logger.LogLevel
+	switch cfg.LogLevel {
+	case "silent":
+		logLevel = logger.Silent
+	case "error":
+		logLevel = logger.Error
+	case "warn":
+		logLevel = logger.Warn
+	case "info":
+		logLevel = logger.Info
+	default:
+		logLevel = logger.Info
+	}
+
 	// 连接数据库
 	DB, err = gorm.Open(dialector, &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+		Logger: logger.Default.LogMode(logLevel),
 	})
 	if err != nil {
 		return fmt.Errorf("连接数据库失败: %w", err)
+	}
+
+	// 配置连接池（仅对非 SQLite 数据库有效，SQLite 不支持连接池）
+	if cfg.Type != "sqlite" {
+		sqlDB, err := DB.DB()
+		if err != nil {
+			return fmt.Errorf("获取数据库实例失败: %w", err)
+		}
+
+		// 设置连接池参数
+		sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
+		sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
+		sqlDB.SetConnMaxLifetime(time.Duration(cfg.ConnMaxLifetime) * time.Second)
 	}
 
 	// 自动迁移数据库表
