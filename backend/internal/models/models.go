@@ -7,7 +7,7 @@ import (
 )
 
 // LogEntry 日志条目模型
-// 存储从 log-filter-monitor 上报的日志数据
+// 存储从 log-filter-monitor 上报的日志数据或手动上传的日志
 type LogEntry struct {
 	ID        uint           `gorm:"primaryKey" json:"id"`                   // 主键 ID
 	Timestamp int64          `gorm:"index;not null" json:"timestamp"`        // 时间戳
@@ -17,6 +17,7 @@ type LogEntry struct {
 	LogFile   string         `gorm:"size:500" json:"log_file"`               // 日志文件路径
 	Pattern   string         `gorm:"type:text" json:"pattern"`               // 匹配模式
 	Tag       string         `gorm:"index;size:100" json:"tag"`              // 标签（用于区分不同项目）
+	Source    string         `gorm:"size:20;default:agent" json:"source"`    // 来源：agent / manual
 	CreatedAt time.Time      `json:"created_at"`                             // 创建时间
 	UpdatedAt time.Time      `json:"updated_at"`                             // 更新时间
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"deleted_at,omitempty"`      // 软删除时间

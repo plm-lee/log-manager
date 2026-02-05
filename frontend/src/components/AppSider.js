@@ -2,8 +2,11 @@ import React, { useState } from 'react';
 import { Layout, Menu } from 'antd';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
+  DashboardOutlined,
   FileTextOutlined,
   BarChartOutlined,
+  UploadOutlined,
+  TagsOutlined,
 } from '@ant-design/icons';
 
 const { Sider } = Layout;
@@ -20,14 +23,29 @@ const AppSider = () => {
   // 菜单项配置
   const menuItems = [
     {
+      key: '/',
+      icon: <DashboardOutlined />,
+      label: '仪表盘',
+    },
+    {
       key: '/logs',
       icon: <FileTextOutlined />,
       label: '日志列表',
     },
     {
+      key: '/logs/upload',
+      icon: <UploadOutlined />,
+      label: '日志上传',
+    },
+    {
       key: '/metrics',
       icon: <BarChartOutlined />,
       label: '指标统计',
+    },
+    {
+      key: '/classification',
+      icon: <TagsOutlined />,
+      label: '分类管理',
     },
   ];
 

@@ -72,28 +72,35 @@ func (a *App) initRouter() {
 		a.router.Use(cors.New(corsConfig))
 	}
 
-	// 配置请求限流（仅对 API 路由生效）
-	if a.cfg.RateLimit.Enabled {
-		api := a.router.Group("/api")
-		api.Use(middleware.RateLimitMiddleware(a.cfg.RateLimit.Rate, a.cfg.RateLimit.Capacity))
-	}
-
 	// 创建处理器实例
 	logHandler := handler.NewLogHandler()
 	metricsHandler := handler.NewMetricsHandler()
+	dashboardHandler := handler.NewDashboardHandler()
 
 	// API 路由组
 	api := a.router.Group("/api/v1")
+	if a.cfg.Auth.APIKey != "" {
+		api.Use(middleware.APIKeyMiddleware(a.cfg.Auth.APIKey))
+	}
+	if a.cfg.RateLimit.Enabled {
+		api.Use(middleware.RateLimitMiddleware(a.cfg.RateLimit.Rate, a.cfg.RateLimit.Capacity))
+	}
 	{
 		// 日志相关接口
 		logs := api.Group("/logs")
 		{
-			logs.POST("", logHandler.ReceiveLog)             // 接收日志
-			logs.POST("/batch", logHandler.BatchReceiveLog)  // 批量接收日志
-			logs.GET("", logHandler.QueryLogs)               // 查询日志
-			logs.GET("/tags", logHandler.GetTags)            // 获取标签列表
+			logs.POST("", logHandler.ReceiveLog)            // 接收日志
+			logs.POST("/batch", logHandler.BatchReceiveLog) // 批量接收日志
+			logs.POST("/upload", logHandler.UploadLog)      // 文件/文本上传
+			logs.GET("/export", logHandler.ExportLogs)      // 导出日志
+			logs.GET("", logHandler.QueryLogs)              // 查询日志
+			logs.GET("/tags", logHandler.GetTags)           // 获取标签列表
+			logs.GET("/tags/stats", logHandler.GetTagStats) // 标签统计（分类管理）
 			logs.GET("/rule-names", logHandler.GetRuleNames) // 获取规则名称列表
 		}
+
+		// 仪表盘接口
+		api.GET("/dashboard/stats", dashboardHandler.GetStats)
 
 		// 指标相关接口
 		metrics := api.Group("/metrics")

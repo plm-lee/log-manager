@@ -6,10 +6,11 @@ server:
   port: 8080
 
 database:
-  # 数据库类型: sqlite, postgres, mysql
-  type: "sqlite"
-  # 数据库连接字符串（SQLite 使用文件路径）
-  dsn: "./log_manager.db"
+  # 数据库类型: sqlite, mysql
+  type: "mysql"
+  # 数据库连接字符串
+  # MySQL 格式: user:password@tcp(host:port)/dbname?charset=utf8mb4&parseTime=True&loc=Local
+  dsn: "root:Lq19970105@tcp(127.0.0.1:3306)/log_manager?charset=utf8mb4&parseTime=True&loc=Local"
 
 # 日志保留天数（0 表示永久保留）
 log_retention_days: 30

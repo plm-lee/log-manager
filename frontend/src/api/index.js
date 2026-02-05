@@ -47,11 +47,43 @@ const logApi = {
   },
 
   /**
+   * 获取标签统计（含日志数量）
+   * @returns {Promise} { tags: [{ tag, count }] }
+   */
+  getTagStats: () => {
+    return api.get('/logs/tags/stats');
+  },
+
+  /**
    * 获取所有规则名称列表
    * @returns {Promise} 规则名称列表
    */
   getRuleNames: () => {
     return api.get('/logs/rule-names');
+  },
+
+  /**
+   * 导出日志
+   * @param {Object} params - 同 queryLogs，增加 format: 'csv' | 'json'
+   * @returns {Promise} blob 响应
+   */
+  exportLogs: (params) => {
+    return api.get('/logs/export', {
+      params,
+      responseType: 'blob',
+    });
+  },
+
+  /**
+   * 上传日志（文件或粘贴文本）
+   * @param {FormData} formData - 包含 file（文件）或 logs（文本），可选 tag
+   * @returns {Promise} 响应数据
+   */
+  uploadLog: (formData) => {
+    return api.post('/logs/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 60000,
+    });
   },
 };
 
@@ -93,5 +125,9 @@ const metricsApi = {
   },
 };
 
-export { logApi, metricsApi };
+const dashboardApi = {
+  getStats: () => api.get('/dashboard/stats'),
+};
+
+export { logApi, metricsApi, dashboardApi };
 export default api;

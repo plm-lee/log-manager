@@ -7,6 +7,7 @@ import (
 	"log-manager/internal/config"
 	"log-manager/internal/models"
 
+	"gorm.io/driver/mysql"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -26,6 +27,8 @@ func Init(cfg *config.DatabaseConfig) error {
 	switch cfg.Type {
 	case "sqlite":
 		dialector = sqlite.Open(cfg.DSN)
+	case "mysql":
+		dialector = mysql.Open(cfg.DSN)
 	default:
 		return fmt.Errorf("不支持的数据库类型: %s", cfg.Type)
 	}

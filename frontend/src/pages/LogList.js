@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Table,
   Card,
@@ -12,8 +13,10 @@ import {
   message,
   Row,
   Col,
+  Modal,
+  Descriptions,
 } from 'antd';
-import { SearchOutlined, ReloadOutlined } from '@ant-design/icons';
+import { SearchOutlined, ReloadOutlined, DownloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { logApi } from '../api';
 
@@ -21,11 +24,43 @@ const { Option } = Select;
 const { RangePicker } = DatePicker;
 const { Text } = Typography;
 
+// 根据日志内容检测级别，返回边框色
+const getLogLevelColor = (text) => {
+  if (!text) return 'transparent';
+  const upper = text.toUpperCase();
+  if (upper.includes('ERROR') || upper.includes('FATAL') || upper.includes('CRITICAL') || upper.includes('EXCEPTION'))
+    return '#cf1322';
+  if (upper.includes('WARN') || upper.includes('WARNING')) return '#d46b08';
+  if (upper.includes('INFO')) return '#1890ff';
+  if (upper.includes('DEBUG')) return '#8c8c8c';
+  return 'transparent';
+};
+
+// 高亮关键词
+const highlightKeyword = (text, keyword) => {
+  if (!text) return text;
+  if (!keyword || !keyword.trim()) return text;
+  const kw = keyword.trim();
+  const regex = new RegExp(`(${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+  const parts = text.split(regex);
+  return parts.map((part, i) =>
+    i % 2 === 1 ? (
+      <mark key={i} style={{ backgroundColor: '#fff566', padding: '0 2px' }}>
+        {part}
+      </mark>
+    ) : (
+      part
+    )
+  );
+};
+
 /**
  * 日志列表页面组件
  * 显示日志数据，支持按标签、规则名称、关键词、时间范围等条件查询
  */
 const LogList = () => {
+  const [searchParams] = useSearchParams();
+  const tagFromUrl = searchParams.get('tag');
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [tags, setTags] = useState([]);
@@ -36,14 +71,18 @@ const LogList = () => {
     total: 0,
   });
 
-  // 查询条件
+  // 查询条件（支持从 URL 传入 tag）
   const [filters, setFilters] = useState({
-    tag: undefined,
+    tag: tagFromUrl || undefined,
     rule_name: undefined,
     keyword: undefined,
     start_time: undefined,
     end_time: undefined,
   });
+
+  // 日志详情弹窗
+  const [detailModalVisible, setDetailModalVisible] = useState(false);
+  const [selectedLog, setSelectedLog] = useState(null);
 
   // 加载标签列表
   const loadTags = async () => {
@@ -66,13 +105,14 @@ const LogList = () => {
   };
 
   // 加载日志数据
-  const loadLogs = async (page = 1, pageSize = 20) => {
+  const loadLogs = async (page = 1, pageSize = 20, override = {}) => {
     setLoading(true);
     try {
       const params = {
         page,
         page_size: pageSize,
         ...filters,
+        ...override,
       };
 
       // 移除空值
@@ -97,11 +137,19 @@ const LogList = () => {
     }
   };
 
+  // 当 URL tag 变化时更新 filters 并重新加载
+  useEffect(() => {
+    if (tagFromUrl) {
+      setFilters((f) => ({ ...f, tag: tagFromUrl }));
+      loadLogs(1, 20, { tag: tagFromUrl });
+    }
+  }, [tagFromUrl]);
+
   // 初始加载
   useEffect(() => {
     loadTags();
     loadRuleNames();
-    loadLogs();
+    loadLogs(1, 20, tagFromUrl ? { tag: tagFromUrl } : {});
   }, []);
 
   // 处理查询
@@ -180,16 +228,19 @@ const LogList = () => {
       key: 'log_line',
       ellipsis: { showTitle: false },
       render: (text) => {
+        const borderColor = getLogLevelColor(text);
         return (
           <div
             style={{
               maxWidth: 600,
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
+              borderLeft: `3px solid ${borderColor}`,
+              paddingLeft: 8,
             }}
             title={text}
           >
-            {text}
+            {highlightKeyword(text, filters.keyword)}
           </div>
         );
       },
@@ -206,6 +257,24 @@ const LogList = () => {
   // 处理分页变化
   const handleTableChange = (newPagination) => {
     loadLogs(newPagination.current, newPagination.pageSize);
+  };
+
+  // 导出日志
+  const handleExport = (format) => {
+    const params = { format, ...filters };
+    Object.keys(params).forEach((key) => params[key] === undefined && delete params[key]);
+    logApi.exportLogs(params).then((res) => {
+      const blob = new Blob([res.data]);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `logs_export_${Date.now()}.${format}`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      message.success(`已导出为 ${format.toUpperCase()} 格式`);
+    }).catch((err) => {
+      message.error('导出失败：' + (err.message || '未知错误'));
+    });
   };
 
   return (
@@ -275,6 +344,12 @@ const LogList = () => {
             <Button icon={<ReloadOutlined />} onClick={handleReset}>
               重置
             </Button>
+            <Button icon={<DownloadOutlined />} onClick={() => handleExport('csv')}>
+              导出 CSV
+            </Button>
+            <Button icon={<DownloadOutlined />} onClick={() => handleExport('json')}>
+              导出 JSON
+            </Button>
           </Space>
         </Space>
       </Card>
@@ -294,9 +369,61 @@ const LogList = () => {
             pageSizeOptions: ['10', '20', '50', '100'],
           }}
           onChange={handleTableChange}
+          onRow={(record) => ({
+            onClick: () => {
+              setSelectedLog(record);
+              setDetailModalVisible(true);
+            },
+            style: { cursor: 'pointer' },
+          })}
           scroll={{ x: 1200 }}
         />
       </Card>
+
+      <Modal
+        title="日志详情"
+        open={detailModalVisible}
+        onCancel={() => setDetailModalVisible(false)}
+        footer={null}
+        width={700}
+      >
+        {selectedLog && (
+          <Descriptions bordered column={1} size="small">
+            <Descriptions.Item label="ID">{selectedLog.id}</Descriptions.Item>
+            <Descriptions.Item label="时间">
+              {dayjs.unix(selectedLog.timestamp).format('YYYY-MM-DD HH:mm:ss')}
+            </Descriptions.Item>
+            <Descriptions.Item label="标签">
+              {selectedLog.tag ? <Tag color="blue">{selectedLog.tag}</Tag> : '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="规则名称">{selectedLog.rule_name || '-'}</Descriptions.Item>
+            <Descriptions.Item label="规则描述">{selectedLog.rule_desc || '-'}</Descriptions.Item>
+            <Descriptions.Item label="日志文件">
+              <Text copyable>{selectedLog.log_file || '-'}</Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="匹配模式">
+              <Text code copyable>
+                {selectedLog.pattern || '-'}
+              </Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="日志内容">
+              <pre
+                style={{
+                  margin: 0,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  maxHeight: 300,
+                  overflow: 'auto',
+                  borderLeft: `3px solid ${getLogLevelColor(selectedLog.log_line)}`,
+                  paddingLeft: 8,
+                }}
+              >
+                {highlightKeyword(selectedLog.log_line, filters.keyword)}
+              </pre>
+            </Descriptions.Item>
+          </Descriptions>
+        )}
+      </Modal>
     </div>
   );
 };

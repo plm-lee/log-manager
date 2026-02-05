@@ -10,11 +10,17 @@ import (
 // Config 应用配置结构体
 // 包含服务器、数据库和其他配置信息
 type Config struct {
-	Server           ServerConfig   `yaml:"server"`            // 服务器配置
-	Database         DatabaseConfig `yaml:"database"`          // 数据库配置
-	LogRetentionDays int            `yaml:"log_retention_days"` // 日志保留天数
-	CORS             CORSConfig     `yaml:"cors"`              // CORS 配置
-	RateLimit        RateLimitConfig `yaml:"rate_limit"`       // 限流配置
+	Server           ServerConfig    `yaml:"server"`             // 服务器配置
+	Database         DatabaseConfig  `yaml:"database"`           // 数据库配置
+	LogRetentionDays int             `yaml:"log_retention_days"` // 日志保留天数
+	CORS             CORSConfig      `yaml:"cors"`               // CORS 配置
+	RateLimit        RateLimitConfig `yaml:"rate_limit"`         // 限流配置
+	Auth             AuthConfig      `yaml:"auth"`               // 认证配置
+}
+
+// AuthConfig 认证配置
+type AuthConfig struct {
+	APIKey string `yaml:"api_key"` // API Key，为空则不做认证
 }
 
 // ServerConfig 服务器配置结构体

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"log-manager/internal/app"
+	"log-manager/internal/cleanup"
 	"log-manager/internal/config"
 	"log-manager/internal/database"
 )
@@ -39,6 +40,11 @@ func main() {
 		Handler: application.GetRouter(),
 	}
 
+	// 启动数据保留定时任务
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go cleanup.StartRetentionJob(ctx, cfg)
+
 	// 在 goroutine 中启动服务器
 	go func() {
 		fmt.Printf("服务器启动在 %s\n", addr)
@@ -51,15 +57,16 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
+	cancel() // 停止数据保留任务
 
 	log.Println("\n正在关闭服务器...")
 
 	// 创建超时上下文，给服务器5秒时间完成当前请求
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
 
 	// 优雅关闭服务器
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("服务器强制关闭: %v", err)
 	}
 
