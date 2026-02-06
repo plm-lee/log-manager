@@ -164,6 +164,51 @@ GET /metrics
 | 连接池 | N/A | ✅ 已添加 |
 | 按标签维度统计 | ✅ 支持 | ⏳ 查询时解析 |
 
+### 7. 数据保留与亿级吞吐优化 ✅
+
+**优化内容：**
+- 分批删除 retention（每批 10000 条），避免大事务锁表
+- 批量接口独立限流（batch_rate: 1000），支撑每日上亿日志
+- 限流双轨：默认 API 100 req/s，批量 API 1000 req/s
+
+**配置示例（亿级场景）：**
+```yaml
+rate_limit:
+  enabled: true
+  rate: 100
+  batch_rate: 1000
+  batch_capacity: 2000
+
+log_retention_days: 30  # 控制单表规模
+```
+
+**MySQL 表分区（可选）：**
+日亿级 × 30 天 ≈ 30 亿行时，建议按天分区以加速 retention 清理。需在创建表时执行：
+
+```sql
+-- 创建按天分区的 log_entries 表（需在首次部署前执行，已有表需迁移）
+CREATE TABLE log_entries (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  timestamp BIGINT NOT NULL,
+  rule_name VARCHAR(255),
+  rule_desc TEXT,
+  log_line TEXT NOT NULL,
+  log_file VARCHAR(500),
+  pattern TEXT,
+  tag VARCHAR(100),
+  source VARCHAR(20) DEFAULT 'agent',
+  created_at DATETIME,
+  updated_at DATETIME,
+  deleted_at DATETIME,
+  INDEX idx_timestamp (timestamp),
+  INDEX idx_tag (tag),
+  INDEX idx_rule_name (rule_name)
+) PARTITION BY RANGE (TO_DAYS(FROM_UNIXTIME(timestamp))) (
+  PARTITION p_min VALUES LESS THAN (0)
+);
+-- 定期添加新分区、删除旧分区以配合 log_retention_days
+```
+
 ## 未来优化方向
 
 1. **指标处理优化：**

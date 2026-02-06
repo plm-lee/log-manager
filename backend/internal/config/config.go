@@ -53,9 +53,11 @@ type CORSConfig struct {
 // RateLimitConfig 限流配置结构体
 // 定义请求限流参数
 type RateLimitConfig struct {
-	Enabled bool `yaml:"enabled"` // 是否启用限流
-	Rate    int  `yaml:"rate"`    // 每秒允许的请求数
-	Capacity int `yaml:"capacity"` // 桶容量（可选，默认为 rate）
+	Enabled       bool `yaml:"enabled"`        // 是否启用限流
+	Rate          int  `yaml:"rate"`           // 每秒允许的请求数（默认 API）
+	Capacity      int  `yaml:"capacity"`       // 桶容量（可选，默认为 rate）
+	BatchRate     int  `yaml:"batch_rate"`     // 批量接口每秒请求数（logs/batch、metrics/batch，默认 1000）
+	BatchCapacity int  `yaml:"batch_capacity"` // 批量接口桶容量（可选，默认等于 batch_rate）
 }
 
 // LoadConfig 加载配置文件
@@ -104,6 +106,12 @@ func LoadConfig(filePath string) (*Config, error) {
 	}
 	if cfg.RateLimit.Capacity <= 0 {
 		cfg.RateLimit.Capacity = cfg.RateLimit.Rate // 默认容量等于速率
+	}
+	if cfg.RateLimit.BatchRate <= 0 {
+		cfg.RateLimit.BatchRate = 1000 // 批量接口默认 1000 req/s，支撑亿级吞吐
+	}
+	if cfg.RateLimit.BatchCapacity <= 0 {
+		cfg.RateLimit.BatchCapacity = cfg.RateLimit.BatchRate
 	}
 
 	return &cfg, nil

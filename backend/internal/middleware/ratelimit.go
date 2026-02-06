@@ -82,3 +82,28 @@ func RateLimitMiddleware(rate int, capacity int) gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// DualRateLimitMiddleware 双轨限流中间件
+// 对 /logs/batch、/metrics/batch 使用更高限额，其他 API 使用默认限额
+func DualRateLimitMiddleware(rate, capacity, batchRate, batchCapacity int) gin.HandlerFunc {
+	defaultLimiter := NewRateLimiter(rate, capacity)
+	batchLimiter := NewRateLimiter(batchRate, batchCapacity)
+
+	return func(c *gin.Context) {
+		path := c.Request.URL.Path
+		useBatch := path == "/api/v1/logs/batch" || path == "/api/v1/metrics/batch"
+		limiter := defaultLimiter
+		if useBatch {
+			limiter = batchLimiter
+		}
+		if !limiter.Allow() {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error":   "请求过于频繁",
+				"message": "请稍后再试",
+			})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}

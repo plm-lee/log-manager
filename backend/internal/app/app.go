@@ -83,7 +83,12 @@ func (a *App) initRouter() {
 		api.Use(middleware.APIKeyMiddleware(a.cfg.Auth.APIKey))
 	}
 	if a.cfg.RateLimit.Enabled {
-		api.Use(middleware.RateLimitMiddleware(a.cfg.RateLimit.Rate, a.cfg.RateLimit.Capacity))
+		api.Use(middleware.DualRateLimitMiddleware(
+			a.cfg.RateLimit.Rate,
+			a.cfg.RateLimit.Capacity,
+			a.cfg.RateLimit.BatchRate,
+			a.cfg.RateLimit.BatchCapacity,
+		))
 	}
 	{
 		// 日志相关接口
