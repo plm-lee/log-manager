@@ -30,6 +30,10 @@ yarn-error.log*
 *.swo
 *~
 
+# 启动脚本运行时
+.pids
+logs/
+
 # 环境变量
 .env
 .env.local

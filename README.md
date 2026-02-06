@@ -37,43 +37,22 @@ log-manager/
 
 ## 快速开始
 
-### 后端启动
+### 一键启动（推荐）
 
-1. 进入后端目录：
+在项目根目录执行：
+
 ```bash
-cd backend
+./start.sh          # 前台运行，Ctrl+C 停止
+./start.sh -d       # 后台运行，输出写入 logs/，使用 ./stop.sh 停止
 ```
 
-2. 安装依赖：
-```bash
-go mod download
-```
+脚本会自动检查 Go、Node.js 环境，首次启动时会安装前端依赖，并按顺序启动后端（8080）和前端（3000）。
 
-3. 启动服务：
-```bash
-go run main.go
-```
+### 手动启动
 
-后端服务将在 `http://localhost:8080` 启动。
+**后端**：`cd backend && go run main.go`（端口 8080）
 
-### 前端启动
-
-1. 进入前端目录：
-```bash
-cd frontend
-```
-
-2. 安装依赖：
-```bash
-npm install
-```
-
-3. 启动开发服务器：
-```bash
-npm start
-```
-
-前端应用将在 `http://localhost:3000` 启动。
+**前端**：`cd frontend && npm install && npm start`（端口 3000）
 
 ### 配置 log-filter-monitor
 
