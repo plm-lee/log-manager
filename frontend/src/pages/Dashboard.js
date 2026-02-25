@@ -36,58 +36,37 @@ const Dashboard = () => {
     );
   }
 
+  const cardDelays = [0, 60, 120, 180, 240, 300];
+
   return (
-    <div>
-      <Title level={4} style={{ marginBottom: 24 }}>
+    <div className="lm-dashboard">
+      <Title level={4} className="lm-page-title">
         概览
       </Title>
-      <Row gutter={[16, 16]}>
-        <Col xs={24} sm={12} lg={6}>
-          <Card hoverable onClick={() => navigate('/logs')} style={{ cursor: 'pointer' }}>
-            <Statistic
-              title="日志总数"
-              value={stats?.total_logs ?? 0}
-              prefix={<FileTextOutlined />}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card hoverable onClick={() => navigate('/metrics')} style={{ cursor: 'pointer' }}>
-            <Statistic
-              title="指标总数"
-              value={stats?.total_metrics ?? 0}
-              prefix={<BarChartOutlined />}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic title="今日日志" value={stats?.today_logs ?? 0} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic title="今日指标" value={stats?.today_metrics ?? 0} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic
-              title="项目/标签数"
-              value={stats?.distinct_tags ?? 0}
-              prefix={<TagsOutlined />}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic
-              title="规则数"
-              value={stats?.distinct_rules ?? 0}
-              prefix={<FilterOutlined />}
-            />
-          </Card>
-        </Col>
+      <Row gutter={[20, 20]}>
+        {[
+          { key: 'logs', title: '日志总数', value: stats?.total_logs ?? 0, icon: <FileTextOutlined />, to: '/logs' },
+          { key: 'metrics', title: '指标总数', value: stats?.total_metrics ?? 0, icon: <BarChartOutlined />, to: '/metrics' },
+          { key: 'today-logs', title: '今日日志', value: stats?.today_logs ?? 0 },
+          { key: 'today-metrics', title: '今日指标', value: stats?.today_metrics ?? 0 },
+          { key: 'tags', title: '项目/标签数', value: stats?.distinct_tags ?? 0, icon: <TagsOutlined /> },
+          { key: 'rules', title: '规则数', value: stats?.distinct_rules ?? 0, icon: <FilterOutlined /> },
+        ].map((item, i) => (
+          <Col xs={24} sm={12} lg={8} key={item.key}>
+            <Card
+              hoverable
+              className="lm-stat-card"
+              style={{ cursor: item.to ? 'pointer' : 'default', animationDelay: `${cardDelays[i]}ms` }}
+              onClick={item.to ? () => navigate(item.to) : undefined}
+            >
+              <Statistic
+                title={item.title}
+                value={item.value}
+                prefix={item.icon}
+              />
+            </Card>
+          </Col>
+        ))}
       </Row>
     </div>
   );

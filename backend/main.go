@@ -19,8 +19,12 @@ import (
 // main 主函数
 // 负责启动日志管理器服务，支持优雅关闭
 func main() {
-	// 加载配置
-	cfg, err := config.LoadConfig("config.yaml")
+	// 加载配置（可通过 CONFIG 环境变量指定配置文件）
+	configFile := "config.yaml"
+	if v := os.Getenv("CONFIG"); v != "" {
+		configFile = v
+	}
+	cfg, err := config.LoadConfig(configFile)
 	if err != nil {
 		log.Fatalf("加载配置文件失败: %v", err)
 	}

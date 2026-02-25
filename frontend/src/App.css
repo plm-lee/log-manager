@@ -1,6 +1,113 @@
 /**
- * 应用主样式
+ * Log Manager - Layout & Content Styles
  */
+
 .App {
   min-height: 100vh;
+}
+
+.lm-layout {
+  background: transparent !important;
+}
+
+.lm-content-wrap {
+  padding: 24px;
+  background: linear-gradient(180deg, var(--lm-bg-elevated) 0%, var(--lm-bg-base) 100%);
+}
+
+.lm-content {
+  background: var(--lm-bg-surface);
+  padding: 28px;
+  margin: 0;
+  min-height: 280px;
+  border-radius: 12px;
+  border: 1px solid var(--lm-border);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+}
+
+/* Sider & Menu overrides for industrial theme */
+.ant-layout-sider {
+  background: var(--lm-bg-elevated) !important;
+}
+
+.ant-menu-dark {
+  background: transparent !important;
+}
+
+.ant-menu-dark .ant-menu-item,
+.ant-menu-dark .ant-menu-submenu-title {
+  color: var(--lm-text-secondary);
+}
+
+.ant-menu-dark .ant-menu-item-selected,
+.ant-menu-dark .ant-menu-item:hover,
+.ant-menu-dark .ant-menu-submenu-title:hover {
+  color: var(--lm-accent-amber);
+  background: rgba(245, 158, 11, 0.12) !important;
+}
+
+/* Dashboard stat cards - staggered reveal */
+.lm-page-title {
+  color: var(--lm-text-primary) !important;
+  margin-bottom: 24px !important;
+  font-weight: 600 !important;
+}
+
+.lm-stat-card {
+  border-radius: 10px !important;
+  border: 1px solid var(--lm-border) !important;
+  animation: lm-fade-in-up 0.5s ease-out both;
+}
+
+.lm-stat-card .ant-statistic-title {
+  color: var(--lm-text-secondary) !important;
+}
+
+.lm-stat-card .ant-statistic-content-value {
+  color: var(--lm-text-primary) !important;
+  font-family: var(--lm-font-mono) !important;
+}
+
+.lm-stat-card .ant-statistic-content-prefix {
+  color: var(--lm-accent-amber) !important;
+}
+
+@keyframes lm-fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Global card & table overrides */
+.lm-content .ant-card {
+  border-radius: 10px;
+  border: 1px solid var(--lm-border);
+}
+
+.lm-content .ant-card-head-title {
+  color: var(--lm-text-primary);
+  font-weight: 600;
+}
+
+.lm-content .ant-table {
+  color: var(--lm-text-primary);
+}
+
+.lm-content .ant-table-thead > tr > th {
+  color: var(--lm-text-secondary);
+  background: var(--lm-bg-elevated) !important;
+  border-bottom: 1px solid var(--lm-border);
+}
+
+.lm-content .ant-table-tbody > tr:hover > td {
+  background: rgba(245, 158, 11, 0.06) !important;
+}
+
+.lm-content .ant-table-tbody > tr > td {
+  border-bottom: 1px solid var(--lm-border);
 }

@@ -59,10 +59,11 @@ const AppSider = () => {
       collapsible
       collapsed={collapsed}
       onCollapse={setCollapsed}
-      width={200}
+      width={220}
       style={{
         overflow: 'auto',
         height: '100vh',
+        background: 'var(--lm-bg-elevated)',
       }}
     >
       <Menu
@@ -71,6 +72,10 @@ const AppSider = () => {
         mode="inline"
         items={menuItems}
         onClick={handleMenuClick}
+        style={{
+          background: 'transparent',
+          borderRight: 0,
+        }}
       />
     </Sider>
   );

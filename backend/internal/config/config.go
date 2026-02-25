@@ -26,8 +26,9 @@ type AuthConfig struct {
 // ServerConfig 服务器配置结构体
 // 定义服务器监听地址和端口
 type ServerConfig struct {
-	Host string `yaml:"host"` // 监听地址
-	Port int    `yaml:"port"` // 监听端口
+	Host    string `yaml:"host"`     // 监听地址
+	Port    int    `yaml:"port"`     // 监听端口
+	WebDist string `yaml:"web_dist"` // 前端静态文件目录，如 ./web 或 ../frontend/build；为空则不托管前端
 }
 
 // DatabaseConfig 数据库配置结构体

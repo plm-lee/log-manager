@@ -102,7 +102,7 @@ const LogUpload = () => {
               style={{ marginTop: 8 }}
             >
               <p className="ant-upload-drag-icon">
-                <InboxOutlined style={{ fontSize: 48, color: '#1890ff' }} />
+                <InboxOutlined style={{ fontSize: 48, color: 'var(--lm-accent-amber)' }} />
               </p>
               <p className="ant-upload-text">点击或拖拽 .log / .txt 文件到此区域</p>
               <p className="ant-upload-hint">支持单文件上传，每行一条日志，最多 10000 行</p>

@@ -19,19 +19,12 @@ const { Content } = Layout;
 function App() {
   return (
     <Router>
-      <Layout style={{ minHeight: '100vh' }}>
+      <Layout className="lm-layout" style={{ minHeight: '100vh' }}>
         <AppHeader />
         <Layout>
           <AppSider />
-          <Layout style={{ padding: '24px' }}>
-            <Content
-              style={{
-                background: '#fff',
-                padding: 24,
-                margin: 0,
-                minHeight: 280,
-              }}
-            >
+          <Layout className="lm-content-wrap">
+            <Content className="lm-content">
               <Routes>
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/logs" element={<LogList />} />

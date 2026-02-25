@@ -45,7 +45,7 @@ const highlightKeyword = (text, keyword) => {
   const parts = text.split(regex);
   return parts.map((part, i) =>
     i % 2 === 1 ? (
-      <mark key={i} style={{ backgroundColor: '#fff566', padding: '0 2px' }}>
+      <mark key={i} style={{ backgroundColor: 'rgba(245, 158, 11, 0.4)', padding: '0 2px', borderRadius: 2 }}>
         {part}
       </mark>
     ) : (

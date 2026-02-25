@@ -64,11 +64,11 @@ const Classification = () => {
 
   return (
     <div>
-      <Title level={4} style={{ marginBottom: 24 }}>
+      <Title level={4} className="lm-page-title">
         分类管理
       </Title>
       <Card>
-        <p style={{ marginBottom: 16, color: '#666' }}>
+        <p style={{ marginBottom: 16, color: 'var(--lm-text-secondary)' }}>
           按标签区分不同项目上报的日志，点击「查看日志」可筛选该标签下的日志。
         </p>
         <Table

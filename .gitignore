@@ -17,6 +17,7 @@ go.work
 node_modules/
 build/
 dist/
+backend/web/   # 生产打包输出（由 start.sh build 生成）
 .DS_Store
 *.log
 npm-debug.log*

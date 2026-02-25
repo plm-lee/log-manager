@@ -2,13 +2,18 @@ package app
 
 import (
 	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
 	"log-manager/internal/config"
 	"log-manager/internal/database"
 	"log-manager/internal/handler"
 	"log-manager/internal/middleware"
 	"log-manager/internal/models"
-	"net/http"
-	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -147,7 +152,7 @@ func (a *App) initRouter() {
 		})
 	})
 
-	// 监控指标接口
+	// 监控指标接口（注意：与 /api/v1/metrics 不同，此为 Prometheus 风格）
 	a.router.GET("/metrics", func(c *gin.Context) {
 		// 获取数据库统计信息
 		var logCount, metricsCount int64
@@ -175,6 +180,50 @@ func (a *App) initRouter() {
 				"database":        dbStats,
 			},
 		})
+	})
+
+	// 托管前端静态文件（生产部署：仅启动后端，无需 Node.js）
+	a.serveWebIfConfigured()
+}
+
+// serveWebIfConfigured 若配置了 web_dist 且目录存在，则托管静态文件并支持 SPA 回退
+func (a *App) serveWebIfConfigured() {
+	webDist := strings.TrimSpace(a.cfg.Server.WebDist)
+	if webDist == "" {
+		return
+	}
+	// 相对路径相对于 backend 工作目录
+	if !filepath.IsAbs(webDist) {
+		webDist = filepath.Join(".", webDist)
+	}
+	info, err := os.Stat(webDist)
+	if err != nil || !info.IsDir() {
+		log.Printf("[web] 跳过静态托管: web_dist=%q 不存在或非目录", a.cfg.Server.WebDist)
+		return
+	}
+	log.Printf("[web] 托管前端: %s", webDist)
+	// 静态资源（CRA 输出在 build/static）
+	a.router.Static("/static", filepath.Join(webDist, "static"))
+	if _, err := os.Stat(filepath.Join(webDist, "favicon.ico")); err == nil {
+		a.router.StaticFile("/favicon.ico", filepath.Join(webDist, "favicon.ico"))
+	}
+	if _, err := os.Stat(filepath.Join(webDist, "manifest.json")); err == nil {
+		a.router.StaticFile("/manifest.json", filepath.Join(webDist, "manifest.json"))
+	}
+	if _, err := os.Stat(filepath.Join(webDist, "robots.txt")); err == nil {
+		a.router.StaticFile("/robots.txt", filepath.Join(webDist, "robots.txt"))
+	}
+	// 根路径与 SPA 回退：未匹配路由返回 index.html
+	indexPath := filepath.Join(webDist, "index.html")
+	a.router.GET("/", func(c *gin.Context) { c.File(indexPath) })
+	a.router.NoRoute(func(c *gin.Context) {
+		// API、健康检查、监控等不交给 SPA
+		path := c.Request.URL.Path
+		if strings.HasPrefix(path, "/api/") || path == "/health" || path == "/metrics" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.File(indexPath)
 	})
 }
 

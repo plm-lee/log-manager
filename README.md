@@ -37,22 +37,32 @@ log-manager/
 
 ## 快速开始
 
-### 一键启动（推荐）
+### 一键启动
 
 在项目根目录执行：
 
 ```bash
-./start.sh          # 前台运行，Ctrl+C 停止
-./start.sh -d       # 后台运行，输出写入 logs/，使用 ./stop.sh 停止
+./start.sh          # 开发：前台运行后端+前端，Ctrl+C 停止
+./start.sh -d       # 开发：后台运行，输出写入 logs/，使用 ./stop.sh 停止
+./start.sh build    # 打包前端到 backend/web，用于生产部署
+./start.sh prod     # 生产：仅启动后端（托管前端），单端口 8080，无需 Node.js
+./start.sh prod -d  # 生产：后台运行
 ```
 
-脚本会自动检查 Go、Node.js 环境，首次启动时会安装前端依赖，并按顺序启动后端（8080）和前端（3000）。
+开发模式会启动后端（8080）和前端开发服务器（3000）；生产模式仅启动后端，将前端静态文件一并托管，适合服务器部署。
+
+### 生产部署流程
+
+1. 本地或 CI 执行：`./start.sh build` 打包前端
+2. 将 `backend/` 目录（含 `web/`、`config.prod.yaml`）上传至服务器
+3. 服务器执行：`cd backend && CONFIG=config.prod.yaml go run main.go` 或使用 `./start.sh prod`
+4. 访问 http://服务器:8080 即可使用
 
 ### 手动启动
 
 **后端**：`cd backend && go run main.go`（端口 8080）
 
-**前端**：`cd frontend && npm install && npm start`（端口 3000）
+**前端开发**：`cd frontend && npm install && npm start`（端口 3000）
 
 ### 配置 log-filter-monitor
 

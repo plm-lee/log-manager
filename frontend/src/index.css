@@ -1,13 +1,64 @@
+/* ============================================
+   Log Manager - Industrial Terminal Theme
+   ============================================ */
+
+:root {
+  /* Base palette - deep slate/navy */
+  --lm-bg-base: #0f1419;
+  --lm-bg-elevated: #1a2332;
+  --lm-bg-surface: #1e2a3a;
+  --lm-bg-card: #243044;
+
+  /* Accent colors */
+  --lm-accent-amber: #f59e0b;
+  --lm-accent-amber-muted: #d97706;
+  --lm-accent-cyan: #22d3ee;
+  --lm-accent-cyan-muted: #06b6d4;
+  --lm-accent-emerald: #10b981;
+
+  /* Text */
+  --lm-text-primary: #f1f5f9;
+  --lm-text-secondary: #94a3b8;
+  --lm-text-muted: #64748b;
+
+  /* Borders & dividers */
+  --lm-border: rgba(148, 163, 184, 0.12);
+  --lm-border-focus: rgba(245, 158, 11, 0.5);
+
+  /* Typography */
+  --lm-font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  --lm-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 14px;
+}
+
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  font-family: var(--lm-font-sans);
+  background: var(--lm-bg-base);
+  color: var(--lm-text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+/* Noise overlay for depth (optional layer) */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 9999;
+}
+
+code,
+pre,
+.font-mono {
+  font-family: var(--lm-font-mono);
 }

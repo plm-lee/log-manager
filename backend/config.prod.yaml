@@ -1,0 +1,35 @@
+# 生产配置：后端托管前端静态文件，仅启动 8080，无需 Node.js
+# 用法: CONFIG=config.prod.yaml go run main.go
+# 或: ./start.sh prod
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  web_dist: "./web"  # 前端 build 输出目录（由 start.sh build 生成）
+
+database:
+  type: "mysql"
+  dsn: "root:Lq19970105@tcp(127.0.0.1:3306)/log_manager?charset=utf8mb4&parseTime=True&loc=Local"
+
+log_retention_days: 30
+
+cors:
+  enabled: true
+  allow_origins:
+    - "*"  # 同源部署时可放宽
+  allow_methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+  allow_headers:
+    - Content-Type
+    - Authorization
+
+rate_limit:
+  enabled: true
+  rate: 100
+  capacity: 200
+  batch_rate: 1000
+  batch_capacity: 2000

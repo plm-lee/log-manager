@@ -270,33 +270,25 @@ const MetricsList = () => {
     return Array.from(types);
   };
 
-  // 定义颜色映射（为不同指标分配不同颜色）
+  // 定义颜色映射（工业风主题）
   const getColorConfig = () => {
     const types = getMetricTypes();
     const colorPalette = [
-      '#52c41a', // 绿色
-      '#faad14', // 橙色
-      '#f5222d', // 红色
-      '#722ed1', // 紫色
-      '#13c2c2', // 青色
-      '#eb2f96', // 粉色
-      '#fa8c16', // 橙红色
-      '#2f54eb', // 深蓝色
-      '#a0d911', // 浅绿色
-      '#fa541c', // 深橙色
-      '#1890ff', // 蓝色
-      '#52c41a', // 绿色
-      '#faad14', // 橙色
-      '#f5222d', // 红色
+      '#f59e0b', // 琥珀
+      '#22d3ee', // 青色
+      '#10b981', // 翠绿
+      '#94a3b8', // 灰蓝
+      '#f472b6', // 粉
+      '#a78bfa', // 紫
+      '#fb923c', // 橙
+      '#34d399', // 薄荷绿
     ];
 
-    // 构建类型到颜色的映射对象
     const colorMap = {};
     let colorIndex = 0;
-    
-    // 先处理总计数
+
     if (types.includes('总计数')) {
-      colorMap['总计数'] = '#1890ff';
+      colorMap['总计数'] = '#f59e0b';
     }
     
     // 再处理其他规则
@@ -307,8 +299,7 @@ const MetricsList = () => {
       }
     });
 
-    // 按照 types 的顺序构建颜色数组
-    const colorArray = types.map((type) => colorMap[type] || '#1890ff');
+    const colorArray = types.map((type) => colorMap[type] || '#f59e0b');
     
     return { colorMap, colorArray };
   };
@@ -486,7 +477,7 @@ const MetricsList = () => {
             <Statistic
               title="总匹配数"
               value={totalCount}
-              valueStyle={{ color: '#3f8600' }}
+              valueStyle={{ color: 'var(--lm-accent-amber)' }}
             />
           </Card>
         </Col>
