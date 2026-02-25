@@ -36,8 +36,8 @@ cors:
 
 # 请求限流配置
 rate_limit:
-  enabled: true    # 是否启用限流
-  rate: 100        # 默认 API 每秒允许的请求数
-  capacity: 200    # 默认 API 桶容量（突发请求数）
+  enabled: true # 是否启用限流
+  rate: 100 # 默认 API 每秒允许的请求数
+  capacity: 200 # 默认 API 桶容量（突发请求数）
   batch_rate: 1000 # 批量接口（/logs/batch、/metrics/batch）每秒请求数，支撑亿级吞吐
   batch_capacity: 2000

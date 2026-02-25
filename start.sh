@@ -1,23 +1,25 @@
 #!/bin/bash
 # log-manager 启动脚本
 # 用法:
-#   ./start.sh           # 开发：前台启动后端+前端，Ctrl+C 停止
-#   ./start.sh -d        # 开发：后台运行，输出写入 logs/
-#   ./start.sh build     # 打包前端到 backend/web，用于生产部署
-#   ./start.sh prod      # 生产：仅启动后端（托管前端），单端口 8080
+#   ./start.sh           # 生产：前台启动（默认），单端口 8080
+#   ./start.sh -d        # 生产：后台运行
+#   ./start.sh build     # 打包前端到 backend/web
+#   ./start.sh dev       # 开发：后端+前端，Ctrl+C 停止
+#   ./start.sh dev -d    # 开发：后台运行
 
 set -e
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
-MODE="dev"
+# 默认生产模式，避免误启动开发环境
+MODE="prod"
 if [ "${1:-}" = "-d" ]; then
-    MODE="daemon"
+    MODE="prod"
 elif [ "${1:-}" = "build" ]; then
     MODE="build"
-elif [ "${1:-}" = "prod" ]; then
-    MODE="prod"
+elif [ "${1:-}" = "dev" ]; then
+    MODE="dev"
 fi
 
 # ---------- build: 打包前端到 backend/web ----------
@@ -39,43 +41,35 @@ if [ "$MODE" = "build" ]; then
 fi
 
 # ---------- prod: 仅启动后端，托管前端 ----------
-do_prod() {
+if [ "$MODE" = "prod" ]; then
     command -v go >/dev/null 2>&1 || { echo "错误: 需要 Go"; exit 1; }
-    if [ ! -d "backend/web" ]; then
+    if [ ! -d "$ROOT/backend/web" ]; then
         echo "请先执行 ./start.sh build 打包前端"
         exit 1
     fi
-    check_port() {
-        if command -v lsof >/dev/null 2>&1; then
-            lsof -Pi :"$1" -sTCP:LISTEN -t >/dev/null 2>&1 && { echo "端口 $1 已被占用"; exit 1; }
+    if command -v lsof >/dev/null 2>&1; then
+        if lsof -Pi :8080 -sTCP:LISTEN -t >/dev/null 2>&1; then
+            echo "错误: 端口 8080 已被占用"
+            exit 1
         fi
-    }
-    check_port 8080
+    fi
 
-    DAEMON=false
-    [ "${2:-}" = "-d" ] || [ "${1:-}" = "-d" ] && DAEMON=true
-
-    if [ "$DAEMON" = true ]; then
+    if [ "${2:-}" = "-d" ] || [ "${1:-}" = "-d" ]; then
         mkdir -p logs
         echo "生产模式（后台）: http://localhost:8080"
-        (cd backend && CONFIG=config.prod.yaml go run main.go >> ../logs/backend.log 2>&1) &
+        (cd "$ROOT/backend" && CONFIG=config.prod.yaml go run main.go >> "$ROOT/logs/backend.log" 2>&1) &
         echo $! > .pids
         echo "使用 ./stop.sh 停止"
     else
         echo "生产模式: http://localhost:8080"
-        (cd backend && CONFIG=config.prod.yaml go run main.go)
+        cd "$ROOT/backend" && CONFIG=config.prod.yaml go run main.go
     fi
-    exit 0
-}
-
-if [ "$MODE" = "prod" ]; then
-    do_prod "$@"
     exit 0
 fi
 
-# ---------- dev: 后端 + 前端开发服务器 ----------
+# ---------- dev: 后端 + 前端开发服务器（需显式指定 ./start.sh dev）----------
 DAEMON=false
-[ "$MODE" = "daemon" ] && DAEMON=true
+[ "$MODE" = "dev" ] && [ "${2:-}" = "-d" ] && DAEMON=true
 
 command -v go >/dev/null 2>&1 || { echo "错误: 需要 Go"; exit 1; }
 command -v npm >/dev/null 2>&1 || { echo "错误: 需要 Node.js/npm"; exit 1; }
