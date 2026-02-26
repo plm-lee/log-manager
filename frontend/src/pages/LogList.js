@@ -233,6 +233,10 @@ const LogList = () => {
           <div
             style={{
               maxWidth: 600,
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
               borderLeft: `3px solid ${borderColor}`,
