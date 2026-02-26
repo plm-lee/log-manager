@@ -1,5 +1,7 @@
 import axios from 'axios';
 
+const TOKEN_KEY = 'lm_token';
+
 // 创建 axios 实例
 // 生产构建（后端托管前端时）使用相对路径；开发时使用 localhost:8888
 const api = axios.create({
@@ -9,6 +11,35 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+// 请求拦截：携带 JWT
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// 响应拦截：401 清除 token 并跳转登录
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem(TOKEN_KEY);
+      if (!window.location.pathname.endsWith('/login') && !window.location.pathname.endsWith('/login/')) {
+        window.location.replace(
+          process.env.NODE_ENV === 'production' ? '/log/manager/login' : '/login'
+        );
+      }
+    }
+    return Promise.reject(err);
+  }
+);
+
+export const getToken = () => localStorage.getItem(TOKEN_KEY);
+export const setToken = (token) => localStorage.setItem(TOKEN_KEY, token);
+export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
 
 /**
  * API 接口定义
@@ -130,5 +161,16 @@ const dashboardApi = {
   getStats: () => api.get('/dashboard/stats'),
 };
 
-export { logApi, metricsApi, dashboardApi };
+const authApi = {
+  /** 获取认证配置（是否启用登录） */
+  getConfig: () => api.get('/auth/config'),
+  /** 登录 */
+  login: (data) => api.post('/auth/login', data).then((r) => r.data),
+  /** 登出 */
+  logout: () => api.post('/auth/logout'),
+  /** 当前用户（需已登录） */
+  me: () => api.get('/auth/me'),
+};
+
+export { logApi, metricsApi, dashboardApi, authApi };
 export default api;

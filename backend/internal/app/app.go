@@ -81,13 +81,11 @@ func (a *App) initRouter() {
 	logHandler := handler.NewLogHandler()
 	metricsHandler := handler.NewMetricsHandler()
 	dashboardHandler := handler.NewDashboardHandler()
+	authHandler := handler.NewAuthHandler(a.cfg)
 
 	// 统一前缀 /log/manager
 	g := a.router.Group("/log/manager")
 	api := g.Group("/api/v1")
-	if a.cfg.Auth.APIKey != "" {
-		api.Use(middleware.APIKeyMiddleware(a.cfg.Auth.APIKey))
-	}
 	if a.cfg.RateLimit.Enabled {
 		api.Use(middleware.DualRateLimitMiddleware(
 			a.cfg.RateLimit.Rate,
@@ -96,31 +94,45 @@ func (a *App) initRouter() {
 			a.cfg.RateLimit.BatchCapacity,
 		))
 	}
+
+	// 认证相关接口
+	api.GET("/auth/config", authHandler.Config)   // 无需认证，返回 login_enabled
+	api.POST("/auth/login", authHandler.Login)    // 无需认证
+	api.POST("/auth/logout", authHandler.Logout)  // 无需认证
+	if a.cfg.Auth.LoginEnabled {
+		api.GET("/auth/me", middleware.APIKeyOrJWTMiddleware(a.cfg.Auth.APIKey, a.cfg.Auth.JWTSecret, true), authHandler.Me)
+	} else {
+		api.GET("/auth/me", authHandler.Me)
+	}
+
+	// Agent 上报接口：仅 API Key 认证（与 log-filter-monitor 等客户端通信）
+	agentAPI := api.Group("")
+	if a.cfg.Auth.APIKey != "" {
+		agentAPI.Use(middleware.APIKeyMiddleware(a.cfg.Auth.APIKey))
+	}
 	{
-		// 日志相关接口
-		logs := api.Group("/logs")
-		{
-			logs.POST("", logHandler.ReceiveLog)            // 接收日志
-			logs.POST("/batch", logHandler.BatchReceiveLog) // 批量接收日志
-			logs.POST("/upload", logHandler.UploadLog)      // 文件/文本上传
-			logs.GET("/export", logHandler.ExportLogs)      // 导出日志
-			logs.GET("", logHandler.QueryLogs)              // 查询日志
-			logs.GET("/tags", logHandler.GetTags)           // 获取标签列表
-			logs.GET("/tags/stats", logHandler.GetTagStats) // 标签统计（分类管理）
-			logs.GET("/rule-names", logHandler.GetRuleNames) // 获取规则名称列表
-		}
+		agentAPI.POST("/logs", logHandler.ReceiveLog)
+		agentAPI.POST("/logs/batch", logHandler.BatchReceiveLog)
+		agentAPI.POST("/metrics", metricsHandler.ReceiveMetrics)
+		agentAPI.POST("/metrics/batch", metricsHandler.BatchReceiveMetrics)
+	}
 
-		// 仪表盘接口
-		api.GET("/dashboard/stats", dashboardHandler.GetStats)
-
-		// 指标相关接口
-		metrics := api.Group("/metrics")
-		{
-			metrics.POST("", metricsHandler.ReceiveMetrics)            // 接收指标
-			metrics.POST("/batch", metricsHandler.BatchReceiveMetrics) // 批量接收指标
-			metrics.GET("", metricsHandler.QueryMetrics)               // 查询指标
-			metrics.GET("/stats", metricsHandler.QueryMetricsStats)    // 查询指标统计（用于图表）
-		}
+	// Admin 接口：Web 管理界面使用，API Key 或 JWT 任一有效
+	adminAPI := api.Group("")
+	adminAPI.Use(middleware.APIKeyOrJWTMiddleware(a.cfg.Auth.APIKey, a.cfg.Auth.JWTSecret, a.cfg.Auth.LoginEnabled))
+	{
+		// 日志管理
+		adminAPI.GET("/logs", logHandler.QueryLogs)
+		adminAPI.POST("/logs/upload", logHandler.UploadLog)
+		adminAPI.GET("/logs/export", logHandler.ExportLogs)
+		adminAPI.GET("/logs/tags", logHandler.GetTags)
+		adminAPI.GET("/logs/tags/stats", logHandler.GetTagStats)
+		adminAPI.GET("/logs/rule-names", logHandler.GetRuleNames)
+		// 仪表盘
+		adminAPI.GET("/dashboard/stats", dashboardHandler.GetStats)
+		// 指标管理
+		adminAPI.GET("/metrics", metricsHandler.QueryMetrics)
+		adminAPI.GET("/metrics/stats", metricsHandler.QueryMetricsStats)
 	}
 
 	// 健康检查接口

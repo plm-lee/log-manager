@@ -41,3 +41,12 @@ rate_limit:
   capacity: 200 # 默认 API 桶容量（突发请求数）
   batch_rate: 1000 # 批量接口（/logs/batch、/metrics/batch）每秒请求数，支撑亿级吞吐
   batch_capacity: 2000
+
+# 认证配置
+auth:
+  api_key: "" # API Key，agent 上报使用；为空则 agent 接口不做认证
+  login_enabled: true # 是否启用 Web 管理界面登录
+  admin_username: "admin"
+  admin_password: "admin" # 请修改为安全密码
+  jwt_secret: "" # JWT 签名密钥，为空时使用默认值（生产环境请设置）
+  jwt_expire_hours: 24

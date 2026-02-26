@@ -20,7 +20,12 @@ type Config struct {
 
 // AuthConfig 认证配置
 type AuthConfig struct {
-	APIKey string `yaml:"api_key"` // API Key，为空则不做认证
+	APIKey          string `yaml:"api_key"`           // API Key，agent 使用；为空则不做认证
+	LoginEnabled    bool   `yaml:"login_enabled"`     // 是否启用 Web 管理界面登录
+	AdminUsername   string `yaml:"admin_username"`    // 管理员用户名
+	AdminPassword   string `yaml:"admin_password"`    // 管理员密码
+	JWTSecret       string `yaml:"jwt_secret"`        // JWT 签名密钥
+	JWTExpireHours  int    `yaml:"jwt_expire_hours"`  // JWT 有效期（小时）
 }
 
 // ServerConfig 服务器配置结构体
@@ -113,6 +118,12 @@ func LoadConfig(filePath string) (*Config, error) {
 	}
 	if cfg.RateLimit.BatchCapacity <= 0 {
 		cfg.RateLimit.BatchCapacity = cfg.RateLimit.BatchRate
+	}
+	if cfg.Auth.JWTExpireHours <= 0 {
+		cfg.Auth.JWTExpireHours = 24 // 默认 24 小时
+	}
+	if cfg.Auth.JWTSecret == "" && cfg.Auth.LoginEnabled {
+		cfg.Auth.JWTSecret = "log-manager-default-secret-change-in-production"
 	}
 
 	return &cfg, nil

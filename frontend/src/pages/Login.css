@@ -1,0 +1,18 @@
+.lm-login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--lm-bg-base, #1a1a1a);
+}
+
+.lm-login-card {
+  width: 400px;
+  background: var(--lm-bg-card, #242424);
+  border: 1px solid var(--lm-border, #333);
+}
+
+.lm-login-card .ant-card-head {
+  border-bottom-color: var(--lm-border, #333);
+  color: var(--lm-text-primary, #fff);
+}

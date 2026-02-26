@@ -33,3 +33,12 @@ rate_limit:
   capacity: 200
   batch_rate: 1000
   batch_capacity: 2000
+
+# 认证配置（生产环境建议启用登录）
+auth:
+  api_key: ""
+  login_enabled: true
+  admin_username: "admin"
+  admin_password: "admin"  # 请修改为安全密码
+  jwt_secret: ""           # 建议设置，否则使用默认值
+  jwt_expire_hours: 24
