@@ -73,6 +73,8 @@ func Init(cfg *config.DatabaseConfig) error {
 	if err := DB.AutoMigrate(
 		&models.LogEntry{},
 		&models.MetricsEntry{},
+		&models.BillingConfig{},
+		&models.BillingEntry{},
 	); err != nil {
 		return fmt.Errorf("数据库迁移失败: %w", err)
 	}

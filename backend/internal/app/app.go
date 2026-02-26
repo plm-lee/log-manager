@@ -81,6 +81,7 @@ func (a *App) initRouter() {
 	logHandler := handler.NewLogHandler()
 	metricsHandler := handler.NewMetricsHandler()
 	dashboardHandler := handler.NewDashboardHandler()
+	billingHandler := handler.NewBillingHandler()
 	authHandler := handler.NewAuthHandler(a.cfg)
 
 	// 统一前缀 /log/manager
@@ -133,6 +134,12 @@ func (a *App) initRouter() {
 		// 指标管理
 		adminAPI.GET("/metrics", metricsHandler.QueryMetrics)
 		adminAPI.GET("/metrics/stats", metricsHandler.QueryMetricsStats)
+		// 计费管理
+		adminAPI.GET("/billing/configs", billingHandler.GetConfigs)
+		adminAPI.POST("/billing/configs", billingHandler.CreateConfig)
+		adminAPI.PUT("/billing/configs/:id", billingHandler.UpdateConfig)
+		adminAPI.DELETE("/billing/configs/:id", billingHandler.DeleteConfig)
+		adminAPI.GET("/billing/stats", billingHandler.GetStats)
 	}
 
 	// 健康检查接口

@@ -7,6 +7,7 @@ import {
   BarChartOutlined,
   UploadOutlined,
   TagsOutlined,
+  DollarOutlined,
 } from '@ant-design/icons';
 
 const { Sider } = Layout;
@@ -47,12 +48,20 @@ const AppSider = () => {
       icon: <TagsOutlined />,
       label: '分类管理',
     },
+    {
+      key: '/billing',
+      icon: <DollarOutlined />,
+      label: '计费统计',
+    },
   ];
 
   // 处理菜单点击
   const handleMenuClick = ({ key }) => {
     navigate(key);
   };
+
+  // 计费子路由时高亮计费菜单
+  const selectedKey = location.pathname.startsWith('/billing') ? '/billing' : location.pathname;
 
   return (
     <Sider
@@ -68,7 +77,7 @@ const AppSider = () => {
     >
       <Menu
         theme="dark"
-        selectedKeys={[location.pathname]}
+        selectedKeys={[selectedKey]}
         mode="inline"
         items={menuItems}
         onClick={handleMenuClick}

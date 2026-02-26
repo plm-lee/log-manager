@@ -172,5 +172,18 @@ const authApi = {
   me: () => api.get('/auth/me'),
 };
 
-export { logApi, metricsApi, dashboardApi, authApi };
+const billingApi = {
+  /** 获取计费配置列表 */
+  getConfigs: () => api.get('/billing/configs'),
+  /** 新增计费配置 */
+  createConfig: (data) => api.post('/billing/configs', data),
+  /** 更新计费配置 */
+  updateConfig: (id, data) => api.put(`/billing/configs/${id}`, data),
+  /** 删除计费配置 */
+  deleteConfig: (id) => api.delete(`/billing/configs/${id}`),
+  /** 计费统计（参数：start_date, end_date 格式 YYYY-MM-DD） */
+  getStats: (params) => api.get('/billing/stats', { params }),
+};
+
+export { logApi, metricsApi, dashboardApi, authApi, billingApi };
 export default api;

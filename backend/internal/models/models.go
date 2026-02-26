@@ -48,3 +48,38 @@ type MetricsEntry struct {
 func (MetricsEntry) TableName() string {
 	return "metrics_entries"
 }
+
+// BillingConfig 计费配置模型
+// 定义计费类型与单价，用于按日志匹配统计计费
+type BillingConfig struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	BillKey     string    `gorm:"size:100;not null;index" json:"bill_key"`     // 计费类型标识
+	MatchType   string    `gorm:"size:32;not null" json:"match_type"`          // tag / rule_name / log_line_contains
+	MatchValue  string    `gorm:"size:255;not null" json:"match_value"`        // 匹配值
+	UnitPrice   float64   `gorm:"type:decimal(12,4);not null" json:"unit_price"` // 单价
+	Description string    `gorm:"type:text" json:"description"`                // 备注
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// TableName 指定表名
+func (BillingConfig) TableName() string {
+	return "billing_configs"
+}
+
+// BillingEntry 计费明细聚合（按天+bill_key）
+// 计费日志在接收时直接写入此表，不进入 log_entries，不受保留策略清除
+type BillingEntry struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	Date      string    `gorm:"size:10;not null;uniqueIndex:idx_billing_date_key" json:"date"`   // YYYY-MM-DD
+	BillKey   string    `gorm:"size:100;not null;uniqueIndex:idx_billing_date_key" json:"bill_key"`
+	Count     int64     `gorm:"not null" json:"count"`
+	Amount    float64   `gorm:"type:decimal(14,4);not null" json:"amount"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// TableName 指定表名
+func (BillingEntry) TableName() string {
+	return "billing_entries"
+}
