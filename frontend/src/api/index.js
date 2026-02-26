@@ -1,9 +1,9 @@
 import axios from 'axios';
 
 // 创建 axios 实例
-// 生产构建（后端托管前端时）使用相对路径 /api/v1；开发时使用 localhost:8080
+// 生产构建（后端托管前端时）使用相对路径；开发时使用 localhost:8888
 const api = axios.create({
-  baseURL: process.env.REACT_APP_API_BASE_URL || (process.env.NODE_ENV === 'production' ? '/api/v1' : 'http://localhost:8080/api/v1'),
+  baseURL: process.env.REACT_APP_API_BASE_URL || (process.env.NODE_ENV === 'production' ? '/log/manager/api/v1' : 'http://localhost:8888/log/manager/api/v1'),
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',

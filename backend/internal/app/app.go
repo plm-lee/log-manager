@@ -60,7 +60,7 @@ func (a *App) Init() error {
 // 配置所有 API 路由和中间件
 func (a *App) initRouter() {
 	// 创建 Gin 路由引擎
-	if a.cfg.Server.Host == "0.0.0.0" && a.cfg.Server.Port == 8080 {
+	if a.cfg.Server.Host == "0.0.0.0" && a.cfg.Server.Port == 8888 {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	a.router = gin.Default()
@@ -82,8 +82,9 @@ func (a *App) initRouter() {
 	metricsHandler := handler.NewMetricsHandler()
 	dashboardHandler := handler.NewDashboardHandler()
 
-	// API 路由组
-	api := a.router.Group("/api/v1")
+	// 统一前缀 /log/manager
+	g := a.router.Group("/log/manager")
+	api := g.Group("/api/v1")
 	if a.cfg.Auth.APIKey != "" {
 		api.Use(middleware.APIKeyMiddleware(a.cfg.Auth.APIKey))
 	}
@@ -123,7 +124,7 @@ func (a *App) initRouter() {
 	}
 
 	// 健康检查接口
-	a.router.GET("/health", func(c *gin.Context) {
+	g.GET("/health", func(c *gin.Context) {
 		// 检查数据库连接
 		sqlDB, err := database.DB.DB()
 		if err != nil {
@@ -153,7 +154,7 @@ func (a *App) initRouter() {
 	})
 
 	// 监控指标接口（注意：与 /api/v1/metrics 不同，此为 Prometheus 风格）
-	a.router.GET("/metrics", func(c *gin.Context) {
+	g.GET("/metrics", func(c *gin.Context) {
 		// 获取数据库统计信息
 		var logCount, metricsCount int64
 		database.DB.Model(&models.LogEntry{}).Count(&logCount)
@@ -183,11 +184,11 @@ func (a *App) initRouter() {
 	})
 
 	// 托管前端静态文件（生产部署：仅启动后端，无需 Node.js）
-	a.serveWebIfConfigured()
+	a.serveWebIfConfigured(g)
 }
 
 // serveWebIfConfigured 若配置了 web_dist 且目录存在，则托管静态文件并支持 SPA 回退
-func (a *App) serveWebIfConfigured() {
+func (a *App) serveWebIfConfigured(g *gin.RouterGroup) {
 	webDist := strings.TrimSpace(a.cfg.Server.WebDist)
 	if webDist == "" {
 		return
@@ -203,27 +204,32 @@ func (a *App) serveWebIfConfigured() {
 	}
 	log.Printf("[web] 托管前端: %s", webDist)
 	// 静态资源（CRA 输出在 build/static）
-	a.router.Static("/static", filepath.Join(webDist, "static"))
+	g.Static("/static", filepath.Join(webDist, "static"))
 	if _, err := os.Stat(filepath.Join(webDist, "favicon.ico")); err == nil {
-		a.router.StaticFile("/favicon.ico", filepath.Join(webDist, "favicon.ico"))
+		g.StaticFile("/favicon.ico", filepath.Join(webDist, "favicon.ico"))
 	}
 	if _, err := os.Stat(filepath.Join(webDist, "manifest.json")); err == nil {
-		a.router.StaticFile("/manifest.json", filepath.Join(webDist, "manifest.json"))
+		g.StaticFile("/manifest.json", filepath.Join(webDist, "manifest.json"))
 	}
 	if _, err := os.Stat(filepath.Join(webDist, "robots.txt")); err == nil {
-		a.router.StaticFile("/robots.txt", filepath.Join(webDist, "robots.txt"))
+		g.StaticFile("/robots.txt", filepath.Join(webDist, "robots.txt"))
 	}
-	// 根路径与 SPA 回退：未匹配路由返回 index.html
+	// 根路径
 	indexPath := filepath.Join(webDist, "index.html")
-	a.router.GET("/", func(c *gin.Context) { c.File(indexPath) })
+	g.GET("/", func(c *gin.Context) { c.File(indexPath) })
+
+	// SPA 回退：使用 NoRoute 避免与 /api 等路径冲突（Gin 中同组内 catch-all 与字面路径冲突）
 	a.router.NoRoute(func(c *gin.Context) {
-		// API、健康检查、监控等不交给 SPA
 		path := c.Request.URL.Path
-		if strings.HasPrefix(path, "/api/") || path == "/health" || path == "/metrics" {
-			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		if strings.HasPrefix(path, "/log/manager") &&
+			!strings.HasPrefix(path, "/log/manager/api/") &&
+			path != "/log/manager/health" &&
+			path != "/log/manager/metrics" &&
+			!strings.HasPrefix(path, "/log/manager/static/") {
+			c.File(indexPath)
 			return
 		}
-		c.File(indexPath)
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 	})
 }
 

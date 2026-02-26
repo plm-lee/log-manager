@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -91,7 +92,7 @@ func DualRateLimitMiddleware(rate, capacity, batchRate, batchCapacity int) gin.H
 
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
-		useBatch := path == "/api/v1/logs/batch" || path == "/api/v1/metrics/batch"
+		useBatch := strings.HasSuffix(path, "/api/v1/logs/batch") || strings.HasSuffix(path, "/api/v1/metrics/batch")
 		limiter := defaultLimiter
 		if useBatch {
 			limiter = batchLimiter

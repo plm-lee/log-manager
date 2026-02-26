@@ -82,7 +82,7 @@ func LoadConfig(filePath string) (*Config, error) {
 		cfg.Server.Host = "0.0.0.0"
 	}
 	if cfg.Server.Port == 0 {
-		cfg.Server.Port = 8080
+		cfg.Server.Port = 8888
 	}
 	if cfg.Database.Type == "" {
 		cfg.Database.Type = "sqlite"

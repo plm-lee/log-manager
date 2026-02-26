@@ -3,7 +3,7 @@ server:
   # 服务器监听地址
   host: "0.0.0.0"
   # 服务器监听端口
-  port: 8080
+  port: 8888
   # 前端静态文件目录，如 ./web 或 ../frontend/build；为空则不托管（需单独启动前端）
   # 生产部署：先 npm run build，将 build 复制到 backend/web，设置 web_dist: "./web"
   web_dist: ""

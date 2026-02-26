@@ -1,7 +1,7 @@
 #!/bin/bash
 # log-manager 启动脚本
 # 用法:
-#   ./start.sh           # 生产：前台启动（默认），单端口 8080
+#   ./start.sh           # 生产：前台启动（默认），单端口 8888
 #   ./start.sh -d        # 生产：后台运行
 #   ./start.sh build     # 打包前端到 backend/web
 #   ./start.sh dev       # 开发：后端+前端，Ctrl+C 停止
@@ -29,7 +29,7 @@ do_build() {
     if [ ! -d "frontend/node_modules" ]; then
         (cd frontend && npm install)
     fi
-    (cd frontend && CI=false npm run build)
+    (cd frontend && CI=false PUBLIC_URL=/log/manager npm run build)
     rm -rf backend/web
     cp -r frontend/build backend/web
     echo "已输出到 backend/web，可用于生产部署"
@@ -48,20 +48,20 @@ if [ "$MODE" = "prod" ]; then
         exit 1
     fi
     if command -v lsof >/dev/null 2>&1; then
-        if lsof -Pi :8080 -sTCP:LISTEN -t >/dev/null 2>&1; then
-            echo "错误: 端口 8080 已被占用"
+        if lsof -Pi :8888 -sTCP:LISTEN -t >/dev/null 2>&1; then
+            echo "错误: 端口 8888 已被占用"
             exit 1
         fi
     fi
 
     if [ "${2:-}" = "-d" ] || [ "${1:-}" = "-d" ]; then
         mkdir -p logs
-        echo "生产模式（后台）: http://localhost:8080"
+        echo "生产模式（后台）: http://localhost:8888/log/manager"
         (cd "$ROOT/backend" && CONFIG=config.prod.yaml go run main.go >> "$ROOT/logs/backend.log" 2>&1) &
         echo $! > .pids
         echo "使用 ./stop.sh 停止"
     else
-        echo "生产模式: http://localhost:8080"
+        echo "生产模式: http://localhost:8888/log/manager"
         cd "$ROOT/backend" && CONFIG=config.prod.yaml go run main.go
     fi
     exit 0
@@ -83,7 +83,7 @@ check_port() {
         fi
     fi
 }
-check_port 8080 "后端"
+check_port 8888 "后端"
 check_port 3000 "前端"
 
 if [ ! -d "frontend/node_modules" ]; then
@@ -127,7 +127,7 @@ FRONTEND_PID=$!
 
 echo ""
 echo "=== log-manager 已启动 ==="
-echo "后端: http://localhost:8080"
+echo "后端: http://localhost:8888"
 echo "前端: http://localhost:3000"
 echo ""
 if [ "$DAEMON" = true ]; then

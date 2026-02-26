@@ -45,22 +45,22 @@ log-manager/
 ./start.sh          # 开发：前台运行后端+前端，Ctrl+C 停止
 ./start.sh -d       # 开发：后台运行，输出写入 logs/，使用 ./stop.sh 停止
 ./start.sh build    # 打包前端到 backend/web，用于生产部署
-./start.sh prod     # 生产：仅启动后端（托管前端），单端口 8080，无需 Node.js
+./start.sh prod     # 生产：仅启动后端（托管前端），单端口 8888，无需 Node.js
 ./start.sh prod -d  # 生产：后台运行
 ```
 
-开发模式会启动后端（8080）和前端开发服务器（3000）；生产模式仅启动后端，将前端静态文件一并托管，适合服务器部署。
+开发模式会启动后端（8888）和前端开发服务器（3000）；生产模式仅启动后端，将前端静态文件一并托管，适合服务器部署。
 
 ### 生产部署流程
 
 1. 本地或 CI 执行：`./start.sh build` 打包前端
 2. 将 `backend/` 目录（含 `web/`、`config.prod.yaml`）上传至服务器
 3. 服务器执行：`cd backend && CONFIG=config.prod.yaml go run main.go` 或使用 `./start.sh prod`
-4. 访问 http://服务器:8080 即可使用
+4. 访问 http://服务器:8888/log/manager 即可使用
 
 ### 手动启动
 
-**后端**：`cd backend && go run main.go`（端口 8080）
+**后端**：`cd backend && go run main.go`（端口 8888）
 
 **前端开发**：`cd frontend && npm install && npm start`（端口 3000）
 
@@ -71,20 +71,24 @@ log-manager/
 ```yaml
 handler:
   type: http
-  api_url: http://localhost:8080/api/v1/logs
+  api_url: http://localhost:8888/log/manager/api/v1/logs
   timeout: 10s
 ```
 
+指标上报需配置 `metrics_handler.api_url: http://localhost:8888/log/manager/api/v1/metrics`
+
 ## API 接口
+
+所有接口路径均以 `/log/manager` 为前缀。
 
 ### 日志接口
 
 #### 接收日志
-- **POST** `/api/v1/logs`
+- **POST** `/log/manager/api/v1/logs`
 - 接收来自 log-filter-monitor 的日志上报
 
 #### 查询日志
-- **GET** `/api/v1/logs`
+- **GET** `/log/manager/api/v1/logs`
 - 查询参数：
   - `tag`: 标签筛选
   - `rule_name`: 规则名称筛选
@@ -95,19 +99,19 @@ handler:
   - `page_size`: 每页数量
 
 #### 获取标签列表
-- **GET** `/api/v1/logs/tags`
+- **GET** `/log/manager/api/v1/logs/tags`
 
 #### 获取规则名称列表
-- **GET** `/api/v1/logs/rule-names`
+- **GET** `/log/manager/api/v1/logs/rule-names`
 
 ### 指标接口
 
 #### 接收指标
-- **POST** `/api/v1/metrics`
+- **POST** `/log/manager/api/v1/metrics`
 - 接收来自 log-filter-monitor 的指标上报
 
 #### 查询指标
-- **GET** `/api/v1/metrics`
+- **GET** `/log/manager/api/v1/metrics`
 - 查询参数：
   - `tag`: 标签筛选
   - `start_time`: 开始时间戳
@@ -122,7 +126,7 @@ handler:
 ```yaml
 server:
   host: "0.0.0.0"      # 监听地址
-  port: 8080           # 监听端口
+  port: 8888           # 监听端口
 
 database:
   type: "sqlite"       # 数据库类型

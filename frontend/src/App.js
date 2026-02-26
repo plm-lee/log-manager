@@ -18,7 +18,7 @@ const { Content } = Layout;
  */
 function App() {
   return (
-    <Router>
+    <Router basename={process.env.NODE_ENV === 'production' ? '/log/manager' : '/'}>
       <Layout className="lm-layout" style={{ minHeight: '100vh' }}>
         <AppHeader />
         <Layout>
