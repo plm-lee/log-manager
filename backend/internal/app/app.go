@@ -14,6 +14,7 @@ import (
 	"log-manager/internal/handler"
 	"log-manager/internal/middleware"
 	"log-manager/internal/models"
+	"log-manager/internal/tcpserver"
 	"log-manager/internal/udpserver"
 
 	"github.com/gin-contrib/cors"
@@ -23,10 +24,11 @@ import (
 // App 应用结构体
 // 负责管理整个应用的初始化和运行
 type App struct {
-	cfg       *config.Config
-	router    *gin.Engine
+	cfg        *config.Config
+	router     *gin.Engine
 	logHandler *handler.LogHandler
-	udpServer interface{ Stop() }
+	udpServer  interface{ Stop() }
+	tcpServer  interface{ Stop() }
 }
 
 // GetRouter 获取路由引擎
@@ -67,6 +69,17 @@ func (a *App) Init() error {
 		}
 	}
 
+	// 启动 TCP 日志接收（若配置启用）
+	if a.cfg.TCP.Enabled {
+		srv, err := tcpserver.Start(&a.cfg.TCP, a.logHandler)
+		if err != nil {
+			return fmt.Errorf("启动TCP日志接收失败: %w", err)
+		}
+		if srv != nil {
+			a.tcpServer = srv
+		}
+	}
+
 	return nil
 }
 
@@ -75,6 +88,14 @@ func (a *App) StopUDPServer() {
 	if a.udpServer != nil {
 		a.udpServer.Stop()
 		a.udpServer = nil
+	}
+}
+
+// StopTCPServer 停止 TCP 服务（优雅关闭时调用）
+func (a *App) StopTCPServer() {
+	if a.tcpServer != nil {
+		a.tcpServer.Stop()
+		a.tcpServer = nil
 	}
 }
 

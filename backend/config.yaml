@@ -52,6 +52,16 @@ udp:
   flush_interval: "100ms" # 批量落库间隔
   flush_size: 500 # 达到该条数立即落库
 
+# TCP 长连接日志接收配置（默认启用，可靠+高性能）
+tcp:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8890
+  secret: "" # 可选，非空时校验 payload 中的 secret/api_key
+  buffer_size: 50000 # 内存缓冲条数（高吞吐）
+  flush_interval: "50ms" # 批量落库间隔（低延迟）
+  flush_size: 1000 # 达到该条数立即落库
+
 # 认证配置
 auth:
   api_key: "" # API Key，agent 上报使用；为空则 agent 接口不做认证

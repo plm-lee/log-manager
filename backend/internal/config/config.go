@@ -17,6 +17,18 @@ type Config struct {
 	RateLimit        RateLimitConfig `yaml:"rate_limit"`         // 限流配置
 	Auth             AuthConfig      `yaml:"auth"`               // 认证配置
 	UDP              UDPConfig       `yaml:"udp"`                // UDP 日志接收配置
+	TCP              TCPConfig       `yaml:"tcp"`                // TCP 长连接日志接收配置
+}
+
+// TCPConfig TCP 日志接收配置
+type TCPConfig struct {
+	Enabled       bool   `yaml:"enabled"`        // 是否启用 TCP 接收
+	Host          string `yaml:"host"`           // 监听地址
+	Port          int    `yaml:"port"`           // 监听端口
+	Secret        string `yaml:"secret"`         // 可选，非空时校验 payload 中的 secret/api_key
+	BufferSize    int    `yaml:"buffer_size"`    // 内存缓冲条数
+	FlushInterval string `yaml:"flush_interval"` // 批量落库间隔，如 100ms
+	FlushSize     int    `yaml:"flush_size"`     // 达到该条数立即落库
 }
 
 // UDPConfig UDP 日志接收配置
@@ -151,6 +163,21 @@ func LoadConfig(filePath string) (*Config, error) {
 	}
 	if cfg.UDP.FlushSize <= 0 {
 		cfg.UDP.FlushSize = 500
+	}
+	if cfg.TCP.Host == "" {
+		cfg.TCP.Host = "0.0.0.0"
+	}
+	if cfg.TCP.Port <= 0 {
+		cfg.TCP.Port = 8890
+	}
+	if cfg.TCP.BufferSize <= 0 {
+		cfg.TCP.BufferSize = 50000 // 高吞吐缓冲
+	}
+	if cfg.TCP.FlushInterval == "" {
+		cfg.TCP.FlushInterval = "50ms" // 低延迟
+	}
+	if cfg.TCP.FlushSize <= 0 {
+		cfg.TCP.FlushSize = 1000
 	}
 
 	return &cfg, nil
