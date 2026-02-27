@@ -12,54 +12,17 @@ import (
 
 // Cache tag 名称内存缓存，用于快速判断 tag 是否已存在
 type Cache struct {
-	mu           sync.RWMutex
-	set          map[string]struct{}
-	billingTagSet map[string]struct{} // 归属计费项目的 tag，用于优先判断是否计费日志
-	db           *gorm.DB
+	mu   sync.RWMutex
+	set  map[string]struct{}
+	db   *gorm.DB
 }
 
 // New 创建 TagCache 实例
 func New(db *gorm.DB) *Cache {
 	return &Cache{
-		set:          make(map[string]struct{}),
-		billingTagSet: make(map[string]struct{}),
-		db:           db,
+		set: make(map[string]struct{}),
+		db:  db,
 	}
-}
-
-// LoadBillingTags 加载归属计费项目的 tag 到 billingTagSet
-func (c *Cache) LoadBillingTags() error {
-	var names []string
-	err := c.db.Table("tags").
-		Select("tags.name").
-		Joins("JOIN tag_projects ON tags.project_id = tag_projects.id").
-		Where("tag_projects.type = ?", "billing").
-		Pluck("tags.name", &names).Error
-	if err != nil {
-		return err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.billingTagSet = make(map[string]struct{}, len(names))
-	for _, n := range names {
-		if n != "" {
-			c.billingTagSet[n] = struct{}{}
-		}
-	}
-	log.Printf("[tagcache] 已加载 %d 个计费 tag", len(c.billingTagSet))
-	return nil
-}
-
-// IsBillingTag 判断 tag 是否归属计费项目
-func (c *Cache) IsBillingTag(name string) bool {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return false
-	}
-	c.mu.RLock()
-	_, ok := c.billingTagSet[name]
-	c.mu.RUnlock()
-	return ok
 }
 
 // LoadFromDB 从 tags 表加载全部 tag 到缓存
@@ -107,10 +70,7 @@ func (c *Cache) EnsureTag(name string) error {
 
 // Reload 重新从数据库加载缓存（分类管理中修改 tag 后调用）
 func (c *Cache) Reload() error {
-	if err := c.LoadFromDB(); err != nil {
-		return err
-	}
-	return c.LoadBillingTags()
+	return c.LoadFromDB()
 }
 
 // BackfillFromLegacyTables 从 log_entries、billing_entries 回填历史 tag 到 tags 表（首次部署时调用）

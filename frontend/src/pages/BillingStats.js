@@ -9,9 +9,10 @@ import {
   message,
   Statistic,
   Select,
+  Collapse,
 } from 'antd';
 import { useNavigate } from 'react-router-dom';
-import { SearchOutlined, SettingOutlined } from '@ant-design/icons';
+import { SearchOutlined, SettingOutlined, WarningOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { billingApi } from '../api';
 
@@ -26,7 +27,6 @@ const BillingStats = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState([]);
-  const [unmatchedData, setUnmatchedData] = useState([]);
   const [totalAmount, setTotalAmount] = useState(0);
   const [dateRange, setDateRange] = useState([
     dayjs().subtract(7, 'day'),
@@ -34,6 +34,8 @@ const BillingStats = () => {
   ]);
   const [selectedTags, setSelectedTags] = useState([]);
   const [tagOptions, setTagOptions] = useState([]);
+  const [unmatched, setUnmatched] = useState([]);
+  const [unmatchedLoading, setUnmatchedLoading] = useState(false);
 
   const loadTags = async () => {
     try {
@@ -51,19 +53,13 @@ const BillingStats = () => {
     }
     setLoading(true);
     try {
-      const start = dateRange[0].format('YYYY-MM-DD');
-      const end = dateRange[1].format('YYYY-MM-DD');
-      const [statsRes, unmatchedRes] = await Promise.all([
-        billingApi.getStats({
-          start_date: start,
-          end_date: end,
-          tags: selectedTags.length ? selectedTags : undefined,
-        }),
-        billingApi.getUnmatched({ start_date: start, end_date: end }),
-      ]);
-      setData(statsRes.data.data || []);
-      setTotalAmount(statsRes.data.total_amount || 0);
-      setUnmatchedData(unmatchedRes.data.data || []);
+      const res = await billingApi.getStats({
+        start_date: dateRange[0].format('YYYY-MM-DD'),
+        end_date: dateRange[1].format('YYYY-MM-DD'),
+        tags: selectedTags.length ? selectedTags : undefined,
+      });
+      setData(res.data.data || []);
+      setTotalAmount(res.data.total_amount || 0);
     } catch (err) {
       message.error('加载计费统计失败: ' + (err.response?.data?.message || err.message));
     } finally {
@@ -71,8 +67,21 @@ const BillingStats = () => {
     }
   };
 
+  const loadUnmatched = async () => {
+    setUnmatchedLoading(true);
+    try {
+      const res = await billingApi.getUnmatched();
+      setUnmatched(res.data.data || []);
+    } catch {
+      setUnmatched([]);
+    } finally {
+      setUnmatchedLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadTags();
+    loadUnmatched();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -186,31 +195,50 @@ const BillingStats = () => {
         )}
       </Card>
 
-      {unmatchedData.length > 0 && (
-        <Card title="无匹配规则的计费日志" style={{ marginTop: 16 }}>
-          <p style={{ marginBottom: 16, color: 'var(--lm-text-secondary)' }}>
-            以下为归属计费项目但未匹配任何计费规则的日志，请前往「计费配置」新增规则。
-          </p>
-          <Table
-            columns={[
-              { title: '日期', dataIndex: 'date', key: 'date', width: 120 },
-              { title: '标签', dataIndex: 'tag', key: 'tag', width: 120 },
-              { title: '数量', dataIndex: 'count', key: 'count', width: 80 },
-              {
-                title: '示例日志',
-                dataIndex: 'sample_log_line',
-                key: 'sample_log_line',
-                ellipsis: true,
-                render: (v) => (v || '-'),
-              },
-            ]}
-            dataSource={unmatchedData}
-            rowKey={(r) => `${r.date}-${r.tag}`}
-            pagination={false}
-            size="small"
-          />
-        </Card>
-      )}
+      <Collapse
+        style={{ marginTop: 16 }}
+        items={[
+          {
+            key: 'unmatched',
+            label: (
+              <Space>
+                <WarningOutlined style={{ color: 'var(--lm-accent-amber)' }} />
+                <span>无匹配规则（归属计费项目的 tag 但未命中任何计费规则，可据此新增配置）</span>
+                {unmatched.length > 0 && (
+                  <Text type="secondary">共 {unmatched.length} 条</Text>
+                )}
+              </Space>
+            ),
+            children: (
+              <Table
+                size="small"
+                columns={[
+                  { title: 'Tag', dataIndex: 'tag', key: 'tag', width: 120 },
+                  { title: '规则名', dataIndex: 'rule_name', key: 'rule_name', width: 150 },
+                  { title: '条数', dataIndex: 'count', key: 'count', width: 80 },
+                  {
+                    title: '最近时间',
+                    dataIndex: 'last_seen',
+                    key: 'last_seen',
+                    width: 180,
+                    render: (v) => (v ? dayjs(v).format('YYYY-MM-DD HH:mm:ss') : '-'),
+                  },
+                  {
+                    title: '日志样例',
+                    dataIndex: 'log_line_sample',
+                    key: 'log_line_sample',
+                    ellipsis: true,
+                  },
+                ]}
+                dataSource={unmatched}
+                rowKey={(r) => `${r.tag}-${r.rule_name}`}
+                loading={unmatchedLoading}
+                pagination={false}
+              />
+            ),
+          },
+        ]}
+      />
     </div>
   );
 };

@@ -7,6 +7,7 @@ import (
 
 	"log-manager/internal/database"
 	"log-manager/internal/models"
+	"log-manager/internal/unmatchedqueue"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -14,14 +15,26 @@ import (
 
 // BillingHandler 计费处理器
 type BillingHandler struct {
-	db *gorm.DB
+	db             *gorm.DB
+	unmatchedQueue *unmatchedqueue.Queue
 }
 
-// NewBillingHandler 创建计费处理器实例
-func NewBillingHandler() *BillingHandler {
+// NewBillingHandler 创建计费处理器实例，unmatchedQueue 可为 nil
+func NewBillingHandler(unmatchedQueue *unmatchedqueue.Queue) *BillingHandler {
 	return &BillingHandler{
-		db: database.DB,
+		db:             database.DB,
+		unmatchedQueue: unmatchedQueue,
 	}
+}
+
+// GetUnmatched 获取无匹配规则的计费日志（归属计费项目 tag 但未命中任何规则）
+func (h *BillingHandler) GetUnmatched(c *gin.Context) {
+	if h.unmatchedQueue == nil {
+		c.JSON(http.StatusOK, gin.H{"data": []interface{}{}})
+		return
+	}
+	items := h.unmatchedQueue.Snapshot(200)
+	c.JSON(http.StatusOK, gin.H{"data": items})
 }
 
 // GetConfigs 获取计费配置列表
@@ -42,8 +55,7 @@ type CreateConfigRequest struct {
 	BillKey     string  `json:"bill_key" binding:"required"`
 	MatchType   string  `json:"match_type" binding:"required,oneof=tag rule_name log_line_contains"`
 	MatchValue  string  `json:"match_value" binding:"required"`
-	TagScope    string  `json:"tag_scope"` // 可选，逗号分隔的 tag 列表；rule_name/log_line_contains 时仅对 scope 内 tag 生效
-	UnitPrice   float64 `json:"unit_price" binding:"gte=0"` // 允许 0（免费），required 对 float64 零值会报错
+	UnitPrice   float64 `json:"unit_price" binding:"gte=0"` // 允许 0（免费）
 	Description string  `json:"description"`
 }
 
@@ -61,7 +73,6 @@ func (h *BillingHandler) CreateConfig(c *gin.Context) {
 		BillKey:     req.BillKey,
 		MatchType:   req.MatchType,
 		MatchValue:  req.MatchValue,
-		TagScope:    strings.TrimSpace(req.TagScope),
 		UnitPrice:   req.UnitPrice,
 		Description: req.Description,
 	}
@@ -80,8 +91,7 @@ type UpdateConfigRequest struct {
 	BillKey     string  `json:"bill_key" binding:"required"`
 	MatchType   string  `json:"match_type" binding:"required,oneof=tag rule_name log_line_contains"`
 	MatchValue  string  `json:"match_value" binding:"required"`
-	TagScope    string  `json:"tag_scope"` // 可选，逗号分隔的 tag 列表
-	UnitPrice   float64 `json:"unit_price" binding:"gte=0"` // 允许 0（免费）
+	UnitPrice   float64 `json:"unit_price" binding:"gte=0"`
 	Description string  `json:"description"`
 }
 
@@ -108,7 +118,6 @@ func (h *BillingHandler) UpdateConfig(c *gin.Context) {
 	config.BillKey = req.BillKey
 	config.MatchType = req.MatchType
 	config.MatchValue = req.MatchValue
-	config.TagScope = strings.TrimSpace(req.TagScope)
 	config.UnitPrice = req.UnitPrice
 	config.Description = req.Description
 	if err := h.db.Save(&config).Error; err != nil {
@@ -171,30 +180,6 @@ type BillingStatItem struct {
 type GetStatsResponse struct {
 	Data        []BillingStatItem `json:"data"`
 	TotalAmount float64           `json:"total_amount"`
-}
-
-// GetUnmatched 获取无匹配规则的计费日志（按日期范围）
-func (h *BillingHandler) GetUnmatched(c *gin.Context) {
-	startDate := c.Query("start_date")
-	endDate := c.Query("end_date")
-	if startDate == "" || endDate == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "缺少参数",
-			"message": "start_date 和 end_date 为必填",
-		})
-		return
-	}
-	var list []models.UnmatchedBillingLog
-	if err := h.db.Where("date >= ? AND date <= ?", startDate, endDate).
-		Order("date DESC, count DESC").
-		Find(&list).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "查询失败",
-			"message": err.Error(),
-		})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 
 // GetStats 计费统计

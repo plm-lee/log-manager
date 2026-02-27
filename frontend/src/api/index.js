@@ -205,6 +205,8 @@ const billingApi = {
   updateConfig: (id, data) => api.put(`/billing/configs/${id}`, data),
   /** 删除计费配置 */
   deleteConfig: (id) => api.delete(`/billing/configs/${id}`),
+  /** 无匹配规则的计费日志（归属计费项目但未命中规则） */
+  getUnmatched: () => api.get('/billing/unmatched'),
   /** 计费统计（参数：start_date, end_date 格式 YYYY-MM-DD，可选 tags 数组） */
   getStats: (params) => {
     const { start_date, end_date, tags } = params;
@@ -214,11 +216,6 @@ const billingApi = {
     }
     return api.get(url);
   },
-  /** 无匹配规则的计费日志（参数：start_date, end_date） */
-  getUnmatched: (params) =>
-    api.get('/billing/unmatched', {
-      params: { start_date: params.start_date, end_date: params.end_date },
-    }),
 };
 
 export { logApi, metricsApi, dashboardApi, authApi, billingApi, tagProjectApi };

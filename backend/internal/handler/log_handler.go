@@ -16,8 +16,8 @@ import (
 	"log-manager/internal/database"
 	"log-manager/internal/models"
 	"log-manager/internal/tagcache"
+	"log-manager/internal/unmatchedqueue"
 
-	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -25,10 +25,11 @@ import (
 
 // indexedBillingConfig 按 match_type 索引的计费配置，用于分层匹配
 type indexedBillingConfig struct {
-	byTag            []models.BillingConfig // match_type=tag
-	byRuleName       []models.BillingConfig // match_type=rule_name
+	byTag             []models.BillingConfig // match_type=tag
+	byRuleName        []models.BillingConfig // match_type=rule_name
 	byLogLineContains []models.BillingConfig // match_type=log_line_contains
-	tagSet           map[string]struct{}    // tag 规则的 match_value 集合，快速判断 tag 是否在计费规则中
+	tagSet            map[string]struct{}    // tag 规则的 match_value 集合
+	billingTagSet     map[string]struct{}    // 归属计费项目的 tag，用于优先判断是否参与计费匹配
 }
 
 // billingConfigCache BillingConfig 内存缓存，减少 DB 查询，返回索引化结构
@@ -58,17 +59,38 @@ func (c *billingConfigCache) get(db *gorm.DB) (*indexedBillingConfig, error) {
 		return nil, err
 	}
 	idx := buildIndexedBillingConfig(configs)
+	idx.billingTagSet = loadBillingTagSet(db)
 	c.indexed = idx
 	c.loadedAt = time.Now()
 	return idx, nil
 }
 
+// loadBillingTagSet 从 tags 表加载归属计费项目的 tag 集合
+func loadBillingTagSet(db *gorm.DB) map[string]struct{} {
+	set := make(map[string]struct{})
+	var projectID uint
+	if err := db.Model(&models.TagProject{}).Where("type = ?", "billing").Limit(1).Pluck("id", &projectID).Error; err != nil || projectID == 0 {
+		return set
+	}
+	var names []string
+	if err := db.Model(&models.Tag{}).Where("project_id = ?", projectID).Pluck("name", &names).Error; err != nil {
+		return set
+	}
+	for _, n := range names {
+		if n != "" {
+			set[strings.TrimSpace(n)] = struct{}{}
+		}
+	}
+	return set
+}
+
 func buildIndexedBillingConfig(configs []models.BillingConfig) *indexedBillingConfig {
 	idx := &indexedBillingConfig{
-		byTag:            make([]models.BillingConfig, 0),
-		byRuleName:       make([]models.BillingConfig, 0),
+		byTag:             make([]models.BillingConfig, 0),
+		byRuleName:        make([]models.BillingConfig, 0),
 		byLogLineContains: make([]models.BillingConfig, 0),
-		tagSet:           make(map[string]struct{}),
+		tagSet:            make(map[string]struct{}),
+		billingTagSet:     make(map[string]struct{}),
 	}
 	for _, cfg := range configs {
 		switch cfg.MatchType {
@@ -87,60 +109,52 @@ func buildIndexedBillingConfig(configs []models.BillingConfig) *indexedBillingCo
 // LogHandler 日志处理器
 // 负责处理日志相关的 HTTP 请求
 type LogHandler struct {
-	db       *gorm.DB
-	bccache  *billingConfigCache
-	tagCache *tagcache.Cache
+	db            *gorm.DB
+	bccache       *billingConfigCache
+	tagCache      *tagcache.Cache
+	unmatchedQueue *unmatchedqueue.Queue
 }
 
 // NewLogHandler 创建日志处理器实例
-// tagCache 可为 nil，为 nil 时不执行 EnsureTag
-func NewLogHandler(tagCache *tagcache.Cache) *LogHandler {
+// tagCache 可为 nil；unmatchedQueue 可为 nil，为 nil 时无匹配不入队
+func NewLogHandler(tagCache *tagcache.Cache, unmatchedQueue *unmatchedqueue.Queue) *LogHandler {
 	return &LogHandler{
-		db:       database.DB,
-		bccache:  &billingConfigCache{ttl: 60 * time.Second},
-		tagCache: tagCache,
+		db:             database.DB,
+		bccache:        &billingConfigCache{ttl: 60 * time.Second},
+		tagCache:       tagCache,
+		unmatchedQueue: unmatchedQueue,
 	}
 }
 
-// tagInScope 检查 req.Tag 是否在 cfg.TagScope 内；TagScope 为空表示对所有 tag 生效
-func tagInScope(reqTag, tagScope string) bool {
-	if tagScope == "" {
-		return true
+// isBillingTag 判断 tag 是否归属计费项目（仅计费项目 tag 才参与计费规则匹配）
+func isBillingTag(tag string, idx *indexedBillingConfig) bool {
+	if tag == "" {
+		return false
 	}
-	reqTag = strings.TrimSpace(reqTag)
-	for _, s := range strings.Split(tagScope, ",") {
-		if strings.TrimSpace(s) == reqTag {
-			return true
-		}
+	tag = strings.TrimSpace(tag)
+	if idx.billingTagSet == nil {
+		return false
 	}
-	return false
+	_, ok := idx.billingTagSet[tag]
+	return ok
 }
 
 // matchBillingConfigs 检查日志是否匹配计费配置，返回匹配的配置列表
-// 采用分层匹配顺序：tag（轻量）-> rule_name（轻量）-> log_line_contains（重操作放最后）
-// rule_name / log_line_contains 支持 tag_scope 预过滤，减少 log_line 扫描
+// 采用分层匹配顺序：tag -> rule_name -> log_line_contains
+// 注意：仅对归属计费项目的 tag 调用此函数
 func matchBillingConfigs(req ReceiveLogRequest, idx *indexedBillingConfig) []models.BillingConfig {
 	var matched []models.BillingConfig
-	// 1. Tag 匹配（短字符串，开销小）
 	for _, cfg := range idx.byTag {
 		if cfg.MatchValue == req.Tag || strings.Contains(req.Tag, cfg.MatchValue) {
 			matched = append(matched, cfg)
 		}
 	}
-	// 2. rule_name 匹配（rule_name 较短），tag_scope 预过滤
 	for _, cfg := range idx.byRuleName {
-		if !tagInScope(req.Tag, cfg.TagScope) {
-			continue
-		}
 		if strings.Contains(req.RuleName, cfg.MatchValue) {
 			matched = append(matched, cfg)
 		}
 	}
-	// 3. log_line_contains 匹配（最重操作），tag_scope 预过滤
 	for _, cfg := range idx.byLogLineContains {
-		if !tagInScope(req.Tag, cfg.TagScope) {
-			continue
-		}
 		if strings.Contains(req.LogLine, cfg.MatchValue) {
 			matched = append(matched, cfg)
 		}
@@ -206,7 +220,6 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 	}
 
 	agg := make(map[string]*billingAggregate)
-	unmatchedAgg := make(map[string]*unmatchedAggregate) // key: date|tag
 	logEntries := make([]models.LogEntry, 0, len(logs))
 	now := time.Now()
 
@@ -214,31 +227,8 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 		if h.tagCache != nil && logReq.Tag != "" {
 			_ = h.tagCache.EnsureTag(logReq.Tag)
 		}
-		isBillingTag := h.tagCache != nil && h.tagCache.IsBillingTag(logReq.Tag)
-		matched := matchBillingConfigs(logReq, idx)
-		if len(matched) > 0 {
-			date := time.Unix(logReq.Timestamp, 0).Format("2006-01-02")
-			tag := strings.TrimSpace(logReq.Tag)
-			for _, cfg := range matched {
-				key := date + "|" + cfg.BillKey + "|" + tag
-				if agg[key] == nil {
-					agg[key] = &billingAggregate{}
-				}
-				agg[key].count++
-				agg[key].amount += cfg.UnitPrice
-			}
-		} else if isBillingTag {
-			date := time.Unix(logReq.Timestamp, 0).Format("2006-01-02")
-			tag := strings.TrimSpace(logReq.Tag)
-			key := date + "|" + tag
-			if unmatchedAgg[key] == nil {
-				unmatchedAgg[key] = &unmatchedAggregate{}
-			}
-			unmatchedAgg[key].count++
-			if unmatchedAgg[key].sampleLogLine == "" && len(logReq.LogLine) <= 500 {
-				unmatchedAgg[key].sampleLogLine = logReq.LogLine
-			}
-		} else {
+		tag := strings.TrimSpace(logReq.Tag)
+		if !isBillingTag(logReq.Tag, idx) {
 			logEntries = append(logEntries, models.LogEntry{
 				Timestamp: logReq.Timestamp,
 				RuleName:  logReq.RuleName,
@@ -251,6 +241,23 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 				CreatedAt: now,
 				UpdatedAt: now,
 			})
+			continue
+		}
+		matched := matchBillingConfigs(logReq, idx)
+		if len(matched) > 0 {
+			date := time.Unix(logReq.Timestamp, 0).Format("2006-01-02")
+			for _, cfg := range matched {
+				key := date + "|" + cfg.BillKey + "|" + tag
+				if agg[key] == nil {
+					agg[key] = &billingAggregate{}
+				}
+				agg[key].count++
+				agg[key].amount += cfg.UnitPrice
+			}
+		} else {
+			if h.unmatchedQueue != nil {
+				h.unmatchedQueue.Add(tag, logReq.RuleName, logReq.LogLine)
+			}
 		}
 	}
 
@@ -291,42 +298,6 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 				for _, v := range agg {
 					successCount += int(v.count)
 				}
-			}
-		}
-		if len(unmatchedAgg) > 0 {
-			unmatchedEntries := make([]models.UnmatchedBillingLog, 0, len(unmatchedAgg))
-			for key, v := range unmatchedAgg {
-				parts := strings.SplitN(key, "|", 2)
-				if len(parts) != 2 {
-					continue
-				}
-				sample := v.sampleLogLine
-				if len(sample) > 500 {
-					sample = sample[:500]
-				}
-				unmatchedEntries = append(unmatchedEntries, models.UnmatchedBillingLog{
-					Date:          parts[0],
-					Tag:           parts[1],
-					Count:         v.count,
-					SampleLogLine: sample,
-					UpdatedAt:     now,
-				})
-			}
-			if len(unmatchedEntries) > 0 {
-				countExpr := "count + VALUES(count)" // MySQL
-				if database.DB.Dialector.Name() == "sqlite" {
-					countExpr = "count + excluded.count" // SQLite
-				}
-				if err := tx.Clauses(clause.OnConflict{
-					Columns:   []clause.Column{{Name: "date"}, {Name: "tag"}},
-					DoUpdates: clause.Assignments(map[string]interface{}{
-						"count":      gorm.Expr(countExpr),
-						"updated_at": now,
-					}),
-				}).CreateInBatches(&unmatchedEntries, 50).Error; err != nil {
-					return err
-				}
-				_ = h.cleanupUnmatchedBillingLogs(tx)
 			}
 		}
 		if len(logEntries) > 0 {
@@ -387,38 +358,10 @@ type BatchReceiveLogResponse struct {
 	IDs     []uint `json:"ids"`     // 成功创建的ID列表
 }
 
-// billingAggregate 按 (date, bill_key, tag) 聚合计费数据
+// billingAggregate 按 (date, bill_key) 聚合计费数据
 type billingAggregate struct {
 	count  int64
 	amount float64
-}
-
-// unmatchedAggregate 无匹配规则的计费日志聚合
-type unmatchedAggregate struct {
-	count         int64
-	sampleLogLine string
-}
-
-// cleanupUnmatchedBillingLogs 清理无匹配规则表：删除 7 天前的记录，或当总数超过 10000 时删除最旧的
-func (h *LogHandler) cleanupUnmatchedBillingLogs(tx *gorm.DB) error {
-	cutoff := time.Now().AddDate(0, 0, -7).Format("2006-01-02")
-	if err := tx.Where("date < ?", cutoff).Delete(&models.UnmatchedBillingLog{}).Error; err != nil {
-		return err
-	}
-	var total int64
-	if err := tx.Model(&models.UnmatchedBillingLog{}).Count(&total).Error; err != nil {
-		return err
-	}
-	if total > 10000 {
-		var oldest []models.UnmatchedBillingLog
-		if err := tx.Order("date ASC, tag ASC").Limit(int(total - 10000)).Find(&oldest).Error; err != nil {
-			return err
-		}
-		for _, r := range oldest {
-			tx.Delete(&r)
-		}
-	}
-	return nil
 }
 
 // BatchReceiveLog 批量接收日志数据

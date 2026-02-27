@@ -68,20 +68,6 @@ func (BillingConfig) TableName() string {
 	return "billing_configs"
 }
 
-// UnmatchedBillingLog 无匹配规则的计费日志（tag 在计费项目下但未匹配任何计费配置）
-type UnmatchedBillingLog struct {
-	ID            uint      `gorm:"primaryKey" json:"id"`
-	Date          string    `gorm:"size:10;not null;uniqueIndex:idx_unmatched_date_tag" json:"date"`
-	Tag           string    `gorm:"size:100;not null;uniqueIndex:idx_unmatched_date_tag" json:"tag"`
-	Count         int64     `gorm:"not null" json:"count"`
-	SampleLogLine string    `gorm:"type:text" json:"sample_log_line"`
-	UpdatedAt     time.Time `json:"updated_at"`
-}
-
-func (UnmatchedBillingLog) TableName() string {
-	return "unmatched_billing_logs"
-}
-
 // BillingEntry 计费明细聚合（按天+bill_key+tag）
 // 计费日志在接收时直接写入此表，不进入 log_entries，不受保留策略清除
 type BillingEntry struct {

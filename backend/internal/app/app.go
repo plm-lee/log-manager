@@ -17,6 +17,7 @@ import (
 	"log-manager/internal/tagcache"
 	"log-manager/internal/tcpserver"
 	"log-manager/internal/udpserver"
+	"log-manager/internal/unmatchedqueue"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -64,12 +65,12 @@ func (a *App) Init() error {
 	if err := tc.BackfillFromLegacyTables(); err != nil {
 		log.Printf("[warn] 回填历史 tag 失败: %v", err)
 	}
-	if err := tc.LoadBillingTags(); err != nil {
-		log.Printf("[warn] 加载计费 tag 失败: %v", err)
-	}
+
+	// 初始化无匹配规则队列
+	unmatchedQueue := unmatchedqueue.New(5000)
 
 	// 初始化路由
-	a.initRouter(tc)
+	a.initRouter(tc, unmatchedQueue)
 
 	// 启动 UDP 日志接收（若配置启用）
 	if a.cfg.UDP.Enabled {
@@ -114,7 +115,7 @@ func (a *App) StopTCPServer() {
 
 // initRouter 初始化路由
 // 配置所有 API 路由和中间件
-func (a *App) initRouter(tagCache *tagcache.Cache) {
+func (a *App) initRouter(tagCache *tagcache.Cache, unmatchedQueue *unmatchedqueue.Queue) {
 	// 创建 Gin 路由引擎
 	if a.cfg.Server.Host == "0.0.0.0" && a.cfg.Server.Port == 8888 {
 		gin.SetMode(gin.ReleaseMode)
@@ -134,11 +135,11 @@ func (a *App) initRouter(tagCache *tagcache.Cache) {
 	}
 
 	// 创建处理器实例
-	a.logHandler = handler.NewLogHandler(tagCache)
+	a.logHandler = handler.NewLogHandler(tagCache, unmatchedQueue)
 	logHandler := a.logHandler
 	metricsHandler := handler.NewMetricsHandler()
 	dashboardHandler := handler.NewDashboardHandler()
-	billingHandler := handler.NewBillingHandler()
+	billingHandler := handler.NewBillingHandler(unmatchedQueue)
 	tagHandler := handler.NewTagHandler(tagCache)
 	authHandler := handler.NewAuthHandler(a.cfg)
 	agentConfigHandler := handler.NewAgentConfigHandler()

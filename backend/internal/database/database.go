@@ -78,7 +78,6 @@ func Init(cfg *config.DatabaseConfig) error {
 		&models.AgentConfig{},
 		&models.TagProject{},
 		&models.Tag{},
-		&models.UnmatchedBillingLog{},
 	); err != nil {
 		return fmt.Errorf("数据库迁移失败: %w", err)
 	}
