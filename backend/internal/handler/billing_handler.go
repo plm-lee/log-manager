@@ -41,7 +41,7 @@ type CreateConfigRequest struct {
 	BillKey     string  `json:"bill_key" binding:"required"`
 	MatchType   string  `json:"match_type" binding:"required,oneof=tag rule_name log_line_contains"`
 	MatchValue  string  `json:"match_value" binding:"required"`
-	UnitPrice   float64 `json:"unit_price" binding:"required"`
+	UnitPrice   float64 `json:"unit_price" binding:"gte=0"` // 允许 0（免费），required 对 float64 零值会报错
 	Description string  `json:"description"`
 }
 
@@ -77,7 +77,7 @@ type UpdateConfigRequest struct {
 	BillKey     string  `json:"bill_key" binding:"required"`
 	MatchType   string  `json:"match_type" binding:"required,oneof=tag rule_name log_line_contains"`
 	MatchValue  string  `json:"match_value" binding:"required"`
-	UnitPrice   float64 `json:"unit_price" binding:"required"`
+	UnitPrice   float64 `json:"unit_price" binding:"gte=0"` // 允许 0（免费）
 	Description string  `json:"description"`
 }
 

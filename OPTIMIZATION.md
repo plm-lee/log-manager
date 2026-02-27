@@ -30,14 +30,14 @@ database:
 ### 2. 批量接收接口 ✅
 
 **优化内容：**
-- 添加批量接收日志接口：`POST /api/v1/logs/batch`
-- 添加批量接收指标接口：`POST /api/v1/metrics/batch`
+- 添加批量接收日志接口：`POST /log/manager/api/v1/logs/batch`
+- 添加批量接收指标接口：`POST /log/manager/api/v1/metrics/batch`
 - 支持一次性接收最多100条记录
 - 使用批量插入提高数据库写入性能
 
 **接口示例：**
 ```json
-POST /api/v1/logs/batch
+POST /log/manager/api/v1/logs/batch
 {
   "logs": [
     {
@@ -163,6 +163,10 @@ GET /metrics
 | 健康检查 | ⏳ 无 | ✅ 已添加 |
 | 连接池 | N/A | ✅ 已添加 |
 | 按标签维度统计 | ✅ 支持 | ⏳ 查询时解析 |
+| TCP 长连接接收 | ✅ Agent 支持 | ✅ 默认启用（端口 8890） |
+| UDP 接收 | ✅ Agent 支持 | ✅ 可选启用（端口 8889） |
+| Web 登录认证 | N/A | ✅ 已添加 |
+| 计费统计 | N/A | ✅ 已添加 |
 
 ### 7. 数据保留与亿级吞吐优化 ✅
 
@@ -181,6 +185,29 @@ rate_limit:
 
 log_retention_days: 30  # 控制单表规模
 ```
+
+### 8. TCP 长连接接收 ✅
+
+**优化内容：**
+- 默认启用 TCP 日志接收（端口 8890），与 HTTP（8888）、UDP（8889）并存
+- Agent 默认使用 TCP 长连接，可靠传输 + 高吞吐
+- 性能优化：bufio 读写缓冲、sync.Pool 复用 payload、TCP_NODELAY 低延迟、批量落库
+
+**配置示例：**
+```yaml
+tcp:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8890
+  buffer_size: 50000   # 高吞吐缓冲
+  flush_interval: "50ms"  # 低延迟
+  flush_size: 1000
+```
+
+**性能提升：**
+- 长连接减少握手开销
+- 批量发送 + 批量落库，降低 syscall 和 DB 压力
+- 缓冲满时阻塞等待，避免丢包
 
 **MySQL 表分区（可选）：**
 日亿级 × 30 天 ≈ 30 亿行时，建议按天分区以加速 retention 清理。需在创建表时执行：

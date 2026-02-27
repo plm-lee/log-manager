@@ -4,8 +4,9 @@
 
 ## 功能特性
 
-- 📝 **日志接收与管理**：接收来自多个项目的日志数据，支持按标签、规则名称、关键词、时间范围等条件查询
+- 📝 **日志接收与管理**：支持 HTTP、UDP、TCP 多种方式接收日志，按标签、规则名称、关键词、时间范围等条件查询
 - 📊 **指标统计展示**：展示各项目的指标统计数据，包括规则匹配计数、总计数等
+- 💰 **计费统计**：配置计费规则，按日聚合计费数据
 - 🏷️ **标签分类**：通过标签区分不同项目上报的日志和指标
 - 🔍 **强大的查询功能**：支持多条件组合查询，快速定位目标日志
 - 🎨 **现代化 UI**：基于 React + Ant Design 构建的美观易用的管理界面
@@ -66,16 +67,33 @@ log-manager/
 
 ### 配置 log-filter-monitor
 
-在 `log-filter-monitor` 的配置文件中，设置 HTTP 处理器：
+在 `log-filter-monitor` 的配置文件中设置上报方式。**推荐 TCP 长连接**（默认，可靠+高性能）：
 
 ```yaml
+# TCP 长连接（默认，推荐）
 handler:
-  type: http
-  api_url: http://localhost:8888/log/manager/api/v1/logs
-  timeout: 10s
+  type: tcp
+  tcp_addr: "manager-host:8890"
+  tcp_batch_size: 200
+  tcp_flush_interval: 200ms
 ```
 
-指标上报需配置 `metrics_handler.api_url: http://localhost:8888/log/manager/api/v1/metrics`
+其他方式示例：
+
+```yaml
+# UDP 上报（可接受少量丢包）
+# handler:
+#   type: udp
+#   udp_addr: "manager-host:8889"
+
+# HTTP 上报
+# handler:
+#   type: http
+#   api_url: http://manager-host:8888/log/manager/api/v1/logs
+#   timeout: 10s
+```
+
+指标上报需配置 `metrics.api_url: http://manager-host:8888/log/manager/api/v1/metrics`。
 
 ## API 接口
 
@@ -85,7 +103,11 @@ handler:
 
 #### 接收日志
 - **POST** `/log/manager/api/v1/logs`
-- 接收来自 log-filter-monitor 的日志上报
+- 接收单条日志上报
+
+#### 批量接收日志
+- **POST** `/log/manager/api/v1/logs/batch`
+- 批量接收日志（最多 100 条/次），适用于 HTTP 批量模式
 
 #### 查询日志
 - **GET** `/log/manager/api/v1/logs`
@@ -125,41 +147,60 @@ handler:
 
 ```yaml
 server:
-  host: "0.0.0.0"      # 监听地址
-  port: 8888           # 监听端口
+  host: "0.0.0.0"
+  port: 8888           # HTTP API 与前端
 
 database:
-  type: "sqlite"       # 数据库类型
-  dsn: "./log_manager.db"  # 数据库连接字符串
+  type: "sqlite"       # 或 mysql
+  dsn: "./log_manager.db"
 
-log_retention_days: 30  # 日志保留天数（0 表示永久保留）
+log_retention_days: 30
+
+# UDP 日志接收（端口 8889）
+udp:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8889
+
+# TCP 长连接日志接收（端口 8890，默认启用）
+tcp:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8890
+  buffer_size: 50000
+  flush_interval: "50ms"
+  flush_size: 1000
+
+# 认证（Web 管理界面登录）
+auth:
+  login_enabled: true
+  admin_username: "admin"
+  admin_password: "admin"  # 生产环境请修改
 
 cors:
   enabled: true
   allow_origins:
     - "http://localhost:3000"
-  allow_methods:
-    - GET
-    - POST
-    - PUT
-    - DELETE
-    - OPTIONS
-  allow_headers:
-    - Content-Type
-    - Authorization
+  allow_methods: [GET, POST, PUT, DELETE, OPTIONS]
+  allow_headers: [Content-Type, Authorization]
 ```
 
 ## 使用说明
 
-1. **查看日志**：
+1. **登录**：
+   - 启用 `auth.login_enabled` 时，访问管理界面需先登录（默认 admin/admin，生产环境请修改密码）
+
+2. **查看日志**：
    - 在日志列表页面，可以通过标签、规则名称、关键词、时间范围等条件筛选日志
    - 支持分页浏览和每页数量调整
 
-2. **查看指标**：
+3. **查看指标**：
    - 在指标统计页面，可以查看各项目的指标数据
    - 点击展开按钮可以查看详细的规则计数信息
 
-3. **标签管理**：
+4. **计费统计**：在计费统计页面可配置计费规则、查看按日聚合计费数据
+
+5. **标签管理**：
    - 系统会自动从上报的日志中提取标签
    - 通过标签可以快速筛选特定项目的日志和指标
 
