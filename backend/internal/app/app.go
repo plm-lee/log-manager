@@ -106,6 +106,7 @@ func (a *App) initRouter() {
 	dashboardHandler := handler.NewDashboardHandler()
 	billingHandler := handler.NewBillingHandler()
 	authHandler := handler.NewAuthHandler(a.cfg)
+	agentConfigHandler := handler.NewAgentConfigHandler()
 
 	// 统一前缀 /log/manager
 	g := a.router.Group("/log/manager")
@@ -139,6 +140,7 @@ func (a *App) initRouter() {
 		agentAPI.POST("/logs/batch", logHandler.BatchReceiveLog)
 		agentAPI.POST("/metrics", metricsHandler.ReceiveMetrics)
 		agentAPI.POST("/metrics/batch", metricsHandler.BatchReceiveMetrics)
+		agentAPI.GET("/agent/config", agentConfigHandler.GetConfig)
 	}
 
 	// Admin 接口：Web 管理界面使用，API Key 或 JWT 任一有效
@@ -158,6 +160,7 @@ func (a *App) initRouter() {
 		adminAPI.GET("/metrics", metricsHandler.QueryMetrics)
 		adminAPI.GET("/metrics/stats", metricsHandler.QueryMetricsStats)
 		// 计费管理
+		adminAPI.POST("/agent/config", agentConfigHandler.SetConfig)
 		adminAPI.GET("/billing/configs", billingHandler.GetConfigs)
 		adminAPI.POST("/billing/configs", billingHandler.CreateConfig)
 		adminAPI.PUT("/billing/configs/:id", billingHandler.UpdateConfig)

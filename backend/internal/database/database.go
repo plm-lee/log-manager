@@ -75,6 +75,7 @@ func Init(cfg *config.DatabaseConfig) error {
 		&models.MetricsEntry{},
 		&models.BillingConfig{},
 		&models.BillingEntry{},
+		&models.AgentConfig{},
 	); err != nil {
 		return fmt.Errorf("数据库迁移失败: %w", err)
 	}

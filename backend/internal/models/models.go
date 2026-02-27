@@ -83,3 +83,18 @@ type BillingEntry struct {
 func (BillingEntry) TableName() string {
 	return "billing_entries"
 }
+
+// AgentConfig Agent 配置下发（供 log-filter-monitor 拉取）
+// agent_id 为 "default" 时作为默认配置
+type AgentConfig struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	AgentID   string    `gorm:"size:64;not null;uniqueIndex" json:"agent_id"` // 如 default
+	ConfigYAML string   `gorm:"type:longtext;not null" json:"config_yaml"`
+	Version   int64     `gorm:"not null" json:"version"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (AgentConfig) TableName() string {
+	return "agent_configs"
+}
