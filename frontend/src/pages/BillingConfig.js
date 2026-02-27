@@ -33,6 +33,7 @@ const BillingConfig = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [configs, setConfigs] = useState([]);
+  const [billingProjectTags, setBillingProjectTags] = useState([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form] = Form.useForm();
@@ -49,13 +50,24 @@ const BillingConfig = () => {
     }
   };
 
+  const loadBillingProjectTags = async () => {
+    try {
+      const res = await billingApi.getBillingProjectTags();
+      setBillingProjectTags(res.data.data || []);
+    } catch {
+      setBillingProjectTags([]);
+    }
+  };
+
   useEffect(() => {
     loadConfigs();
+    loadBillingProjectTags();
   }, []);
 
   const handleAdd = () => {
     setEditingId(null);
     form.resetFields();
+    loadBillingProjectTags();
     setModalVisible(true);
   };
 
@@ -84,11 +96,12 @@ const BillingConfig = () => {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
+      const { billing_tag, ...payload } = values;
       if (editingId) {
-        await billingApi.updateConfig(editingId, values);
+        await billingApi.updateConfig(editingId, payload);
         message.success('更新成功');
       } else {
-        await billingApi.createConfig(values);
+        await billingApi.createConfig(payload);
         message.success('新增成功');
       }
       setModalVisible(false);
@@ -194,6 +207,25 @@ const BillingConfig = () => {
         cancelText="取消"
       >
         <Form form={form} layout="vertical">
+          {!editingId && (
+            <Form.Item
+              name="billing_tag"
+              label="计费 Tag（必选）"
+              extra="请先从已标记为计费项目的标签中选择一个。若列表为空，请先在「分类管理」中将标签设置到计费项目。"
+              rules={[{ required: true, message: '请选择计费 Tag' }]}
+            >
+              <Select
+                placeholder="选择计费项目下的 Tag"
+                allowClear
+                options={billingProjectTags.map((t) => ({ label: t, value: t }))}
+                onChange={(v) => {
+                  if (v) {
+                    form.setFieldsValue({ match_type: 'tag', match_value: v });
+                  }
+                }}
+              />
+            </Form.Item>
+          )}
           <Form.Item
             name="bill_key"
             label="计费类型标识 (bill_key)"

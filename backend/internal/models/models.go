@@ -56,6 +56,7 @@ type BillingConfig struct {
 	BillKey     string    `gorm:"size:100;not null;index" json:"bill_key"`     // 计费类型标识
 	MatchType   string    `gorm:"size:32;not null" json:"match_type"`          // tag / rule_name / log_line_contains
 	MatchValue  string    `gorm:"size:255;not null" json:"match_value"`        // 匹配值
+	TagScope    string    `gorm:"size:500;default:''" json:"tag_scope"`        // 可选，逗号分隔的 tag 列表；为空表示对所有 tag 生效
 	UnitPrice   float64   `gorm:"type:decimal(12,4);not null" json:"unit_price"` // 单价
 	Description string    `gorm:"type:text" json:"description"`                // 备注
 	CreatedAt   time.Time `json:"created_at"`
@@ -67,12 +68,27 @@ func (BillingConfig) TableName() string {
 	return "billing_configs"
 }
 
-// BillingEntry 计费明细聚合（按天+bill_key）
+// UnmatchedBillingLog 无匹配规则的计费日志（tag 在计费项目下但未匹配任何计费配置）
+type UnmatchedBillingLog struct {
+	ID            uint      `gorm:"primaryKey" json:"id"`
+	Date          string    `gorm:"size:10;not null;uniqueIndex:idx_unmatched_date_tag" json:"date"`
+	Tag           string    `gorm:"size:100;not null;uniqueIndex:idx_unmatched_date_tag" json:"tag"`
+	Count         int64     `gorm:"not null" json:"count"`
+	SampleLogLine string    `gorm:"type:text" json:"sample_log_line"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+func (UnmatchedBillingLog) TableName() string {
+	return "unmatched_billing_logs"
+}
+
+// BillingEntry 计费明细聚合（按天+bill_key+tag）
 // 计费日志在接收时直接写入此表，不进入 log_entries，不受保留策略清除
 type BillingEntry struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
-	Date      string    `gorm:"size:10;not null;uniqueIndex:idx_billing_date_key" json:"date"`   // YYYY-MM-DD
-	BillKey   string    `gorm:"size:100;not null;uniqueIndex:idx_billing_date_key" json:"bill_key"`
+	Date      string    `gorm:"size:10;not null;uniqueIndex:idx_billing_date_key_tag" json:"date"`   // YYYY-MM-DD
+	BillKey   string    `gorm:"size:100;not null;uniqueIndex:idx_billing_date_key_tag" json:"bill_key"`
+	Tag       string    `gorm:"size:100;default:'';uniqueIndex:idx_billing_date_key_tag" json:"tag"` // 标签（实际日志的 tag）
 	Count     int64     `gorm:"not null" json:"count"`
 	Amount    float64   `gorm:"type:decimal(14,4);not null" json:"amount"`
 	CreatedAt time.Time `json:"created_at"`
@@ -82,6 +98,35 @@ type BillingEntry struct {
 // TableName 指定表名
 func (BillingEntry) TableName() string {
 	return "billing_entries"
+}
+
+// TagProject 大项目（tag 聚合）
+// Type=billing 时为系统默认的计费项目，归属该项目的 tag 即视为计费类型
+type TagProject struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	Name        string    `gorm:"size:100;not null" json:"name"`        // 项目名称
+	Type        string    `gorm:"size:32;default:'normal'" json:"type"` // normal | billing
+	Description string    `gorm:"type:text" json:"description"`         // 描述
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+func (TagProject) TableName() string {
+	return "tag_projects"
+}
+
+// Tag 标签（独立存储，用于缓存与分类管理）
+type Tag struct {
+	ID        uint        `gorm:"primaryKey" json:"id"`
+	Name      string      `gorm:"size:100;uniqueIndex;not null" json:"name"` // tag 字符串
+	ProjectID *uint       `gorm:"index" json:"project_id"`                   // 所属大项目（可选）
+	Project   *TagProject `gorm:"foreignKey:ProjectID" json:"project,omitempty"`
+	CreatedAt time.Time   `json:"created_at"`
+	UpdatedAt time.Time   `json:"updated_at"`
+}
+
+func (Tag) TableName() string {
+	return "tags"
 }
 
 // AgentConfig Agent 配置下发（供 log-filter-monitor 拉取）

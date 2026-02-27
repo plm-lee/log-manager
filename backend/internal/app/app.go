@@ -14,6 +14,7 @@ import (
 	"log-manager/internal/handler"
 	"log-manager/internal/middleware"
 	"log-manager/internal/models"
+	"log-manager/internal/tagcache"
 	"log-manager/internal/tcpserver"
 	"log-manager/internal/udpserver"
 
@@ -55,8 +56,20 @@ func (a *App) Init() error {
 		return fmt.Errorf("初始化数据库失败: %w", err)
 	}
 
+	// 初始化 Tag 缓存
+	tc := tagcache.New(database.DB)
+	if err := tc.LoadFromDB(); err != nil {
+		return fmt.Errorf("加载 tag 缓存失败: %w", err)
+	}
+	if err := tc.BackfillFromLegacyTables(); err != nil {
+		log.Printf("[warn] 回填历史 tag 失败: %v", err)
+	}
+	if err := tc.LoadBillingTags(); err != nil {
+		log.Printf("[warn] 加载计费 tag 失败: %v", err)
+	}
+
 	// 初始化路由
-	a.initRouter()
+	a.initRouter(tc)
 
 	// 启动 UDP 日志接收（若配置启用）
 	if a.cfg.UDP.Enabled {
@@ -101,7 +114,7 @@ func (a *App) StopTCPServer() {
 
 // initRouter 初始化路由
 // 配置所有 API 路由和中间件
-func (a *App) initRouter() {
+func (a *App) initRouter(tagCache *tagcache.Cache) {
 	// 创建 Gin 路由引擎
 	if a.cfg.Server.Host == "0.0.0.0" && a.cfg.Server.Port == 8888 {
 		gin.SetMode(gin.ReleaseMode)
@@ -121,11 +134,12 @@ func (a *App) initRouter() {
 	}
 
 	// 创建处理器实例
-	a.logHandler = handler.NewLogHandler()
+	a.logHandler = handler.NewLogHandler(tagCache)
 	logHandler := a.logHandler
 	metricsHandler := handler.NewMetricsHandler()
 	dashboardHandler := handler.NewDashboardHandler()
 	billingHandler := handler.NewBillingHandler()
+	tagHandler := handler.NewTagHandler(tagCache)
 	authHandler := handler.NewAuthHandler(a.cfg)
 	agentConfigHandler := handler.NewAgentConfigHandler()
 
@@ -174,6 +188,12 @@ func (a *App) initRouter() {
 		adminAPI.GET("/logs/export", logHandler.ExportLogs)
 		adminAPI.GET("/logs/tags", logHandler.GetTags)
 		adminAPI.GET("/logs/tags/stats", logHandler.GetTagStats)
+		adminAPI.GET("/logs/tags/managed", tagHandler.GetManagedTags)
+		adminAPI.PUT("/logs/tags/:name/project", tagHandler.SetTagProject)
+		adminAPI.GET("/tag-projects", tagHandler.ListTagProjects)
+		adminAPI.POST("/tag-projects", tagHandler.CreateTagProject)
+		adminAPI.PUT("/tag-projects/:id", tagHandler.UpdateTagProject)
+		adminAPI.DELETE("/tag-projects/:id", tagHandler.DeleteTagProject)
 		adminAPI.GET("/logs/rule-names", logHandler.GetRuleNames)
 		// 仪表盘
 		adminAPI.GET("/dashboard/stats", dashboardHandler.GetStats)
@@ -182,11 +202,14 @@ func (a *App) initRouter() {
 		adminAPI.GET("/metrics/stats", metricsHandler.QueryMetricsStats)
 		// 计费管理
 		adminAPI.POST("/agent/config", agentConfigHandler.SetConfig)
+		adminAPI.GET("/billing/tags", billingHandler.GetTags)
+		adminAPI.GET("/billing/billing-project-tags", tagHandler.GetBillingProjectTags)
 		adminAPI.GET("/billing/configs", billingHandler.GetConfigs)
 		adminAPI.POST("/billing/configs", billingHandler.CreateConfig)
 		adminAPI.PUT("/billing/configs/:id", billingHandler.UpdateConfig)
 		adminAPI.DELETE("/billing/configs/:id", billingHandler.DeleteConfig)
 		adminAPI.GET("/billing/stats", billingHandler.GetStats)
+		adminAPI.GET("/billing/unmatched", billingHandler.GetUnmatched)
 	}
 
 	// 健康检查接口

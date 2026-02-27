@@ -76,10 +76,35 @@ func Init(cfg *config.DatabaseConfig) error {
 		&models.BillingConfig{},
 		&models.BillingEntry{},
 		&models.AgentConfig{},
+		&models.TagProject{},
+		&models.Tag{},
+		&models.UnmatchedBillingLog{},
 	); err != nil {
 		return fmt.Errorf("数据库迁移失败: %w", err)
 	}
 
+	// 确保存在唯一的计费项目（Type=billing）
+	if err := EnsureBillingProject(); err != nil {
+		return fmt.Errorf("初始化计费项目失败: %w", err)
+	}
+
+	return nil
+}
+
+// EnsureBillingProject 确保存在唯一的计费项目，不存在则自动创建
+func EnsureBillingProject() error {
+	var count int64
+	if err := DB.Model(&models.TagProject{}).Where("type = ?", "billing").Count(&count).Error; err != nil {
+		return err
+	}
+	if count == 0 {
+		p := models.TagProject{
+			Name:        "计费项目",
+			Type:        "billing",
+			Description: "系统默认计费项目，归属此项目的 tag 视为计费类型",
+		}
+		return DB.Create(&p).Error
+	}
 	return nil
 }
 

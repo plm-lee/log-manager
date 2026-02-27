@@ -15,41 +15,73 @@ import (
 
 	"log-manager/internal/database"
 	"log-manager/internal/models"
+	"log-manager/internal/tagcache"
 
+	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-// billingConfigCache BillingConfig 内存缓存，减少 DB 查询
+// indexedBillingConfig 按 match_type 索引的计费配置，用于分层匹配
+type indexedBillingConfig struct {
+	byTag            []models.BillingConfig // match_type=tag
+	byRuleName       []models.BillingConfig // match_type=rule_name
+	byLogLineContains []models.BillingConfig // match_type=log_line_contains
+	tagSet           map[string]struct{}    // tag 规则的 match_value 集合，快速判断 tag 是否在计费规则中
+}
+
+// billingConfigCache BillingConfig 内存缓存，减少 DB 查询，返回索引化结构
 type billingConfigCache struct {
 	mu       sync.RWMutex
-	configs  []models.BillingConfig
+	indexed  *indexedBillingConfig
 	loadedAt time.Time
 	ttl      time.Duration
 }
 
-func (c *billingConfigCache) get(db *gorm.DB) ([]models.BillingConfig, error) {
+func (c *billingConfigCache) get(db *gorm.DB) (*indexedBillingConfig, error) {
 	c.mu.RLock()
-	if time.Since(c.loadedAt) < c.ttl && len(c.configs) > 0 {
-		configs := c.configs
+	if time.Since(c.loadedAt) < c.ttl && c.indexed != nil {
+		idx := c.indexed
 		c.mu.RUnlock()
-		return configs, nil
+		return idx, nil
 	}
 	c.mu.RUnlock()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if time.Since(c.loadedAt) < c.ttl && len(c.configs) > 0 {
-		return c.configs, nil
+	if time.Since(c.loadedAt) < c.ttl && c.indexed != nil {
+		return c.indexed, nil
 	}
 	var configs []models.BillingConfig
 	if err := db.Order("id ASC").Find(&configs).Error; err != nil {
 		return nil, err
 	}
-	c.configs = configs
+	idx := buildIndexedBillingConfig(configs)
+	c.indexed = idx
 	c.loadedAt = time.Now()
-	return configs, nil
+	return idx, nil
+}
+
+func buildIndexedBillingConfig(configs []models.BillingConfig) *indexedBillingConfig {
+	idx := &indexedBillingConfig{
+		byTag:            make([]models.BillingConfig, 0),
+		byRuleName:       make([]models.BillingConfig, 0),
+		byLogLineContains: make([]models.BillingConfig, 0),
+		tagSet:           make(map[string]struct{}),
+	}
+	for _, cfg := range configs {
+		switch cfg.MatchType {
+		case "tag":
+			idx.byTag = append(idx.byTag, cfg)
+			idx.tagSet[cfg.MatchValue] = struct{}{}
+		case "rule_name":
+			idx.byRuleName = append(idx.byRuleName, cfg)
+		case "log_line_contains":
+			idx.byLogLineContains = append(idx.byLogLineContains, cfg)
+		}
+	}
+	return idx
 }
 
 // LogHandler 日志处理器
@@ -57,52 +89,79 @@ func (c *billingConfigCache) get(db *gorm.DB) ([]models.BillingConfig, error) {
 type LogHandler struct {
 	db       *gorm.DB
 	bccache  *billingConfigCache
+	tagCache *tagcache.Cache
 }
 
 // NewLogHandler 创建日志处理器实例
-// 返回: LogHandler 实例
-func NewLogHandler() *LogHandler {
+// tagCache 可为 nil，为 nil 时不执行 EnsureTag
+func NewLogHandler(tagCache *tagcache.Cache) *LogHandler {
 	return &LogHandler{
-		db:      database.DB,
-		bccache: &billingConfigCache{ttl: 60 * time.Second},
+		db:       database.DB,
+		bccache:  &billingConfigCache{ttl: 60 * time.Second},
+		tagCache: tagCache,
 	}
 }
 
+// tagInScope 检查 req.Tag 是否在 cfg.TagScope 内；TagScope 为空表示对所有 tag 生效
+func tagInScope(reqTag, tagScope string) bool {
+	if tagScope == "" {
+		return true
+	}
+	reqTag = strings.TrimSpace(reqTag)
+	for _, s := range strings.Split(tagScope, ",") {
+		if strings.TrimSpace(s) == reqTag {
+			return true
+		}
+	}
+	return false
+}
+
 // matchBillingConfigs 检查日志是否匹配计费配置，返回匹配的配置列表
-func matchBillingConfigs(req ReceiveLogRequest, configs []models.BillingConfig) []models.BillingConfig {
+// 采用分层匹配顺序：tag（轻量）-> rule_name（轻量）-> log_line_contains（重操作放最后）
+// rule_name / log_line_contains 支持 tag_scope 预过滤，减少 log_line 扫描
+func matchBillingConfigs(req ReceiveLogRequest, idx *indexedBillingConfig) []models.BillingConfig {
 	var matched []models.BillingConfig
-	for _, cfg := range configs {
-		switch cfg.MatchType {
-		case "tag":
-			if cfg.MatchValue == req.Tag || strings.Contains(req.Tag, cfg.MatchValue) {
-				matched = append(matched, cfg)
-			}
-		case "rule_name":
-			if strings.Contains(req.RuleName, cfg.MatchValue) {
-				matched = append(matched, cfg)
-			}
-		case "log_line_contains":
-			if strings.Contains(req.LogLine, cfg.MatchValue) {
-				matched = append(matched, cfg)
-			}
+	// 1. Tag 匹配（短字符串，开销小）
+	for _, cfg := range idx.byTag {
+		if cfg.MatchValue == req.Tag || strings.Contains(req.Tag, cfg.MatchValue) {
+			matched = append(matched, cfg)
+		}
+	}
+	// 2. rule_name 匹配（rule_name 较短），tag_scope 预过滤
+	for _, cfg := range idx.byRuleName {
+		if !tagInScope(req.Tag, cfg.TagScope) {
+			continue
+		}
+		if strings.Contains(req.RuleName, cfg.MatchValue) {
+			matched = append(matched, cfg)
+		}
+	}
+	// 3. log_line_contains 匹配（最重操作），tag_scope 预过滤
+	for _, cfg := range idx.byLogLineContains {
+		if !tagInScope(req.Tag, cfg.TagScope) {
+			continue
+		}
+		if strings.Contains(req.LogLine, cfg.MatchValue) {
+			matched = append(matched, cfg)
 		}
 	}
 	return matched
 }
 
-// upsertBillingEntry 按 (date, bill_key) 聚合计费数据，存在则累加
-func (h *LogHandler) upsertBillingEntry(date string, billKey string, addCount int64, addAmount float64) error {
+// upsertBillingEntry 按 (date, bill_key, tag) 聚合计费数据，存在则累加
+func (h *LogHandler) upsertBillingEntry(date string, billKey string, tag string, addCount int64, addAmount float64) error {
 	now := time.Now()
 	entry := models.BillingEntry{
 		Date:      date,
 		BillKey:   billKey,
+		Tag:       tag,
 		Count:     addCount,
 		Amount:    addAmount,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 	return h.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "date"}, {Name: "bill_key"}},
+		Columns:   []clause.Column{{Name: "date"}, {Name: "bill_key"}, {Name: "tag"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"count":      gorm.Expr("count + ?", addCount),
 			"amount":     gorm.Expr("amount + ?", addAmount),
@@ -141,26 +200,43 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 		logs = logs[:100] // 单次最多处理 100 条
 	}
 
-	configs, err := h.bccache.get(h.db)
+	idx, err := h.bccache.get(h.db)
 	if err != nil {
 		return 0, 0, nil, err
 	}
 
 	agg := make(map[string]*billingAggregate)
+	unmatchedAgg := make(map[string]*unmatchedAggregate) // key: date|tag
 	logEntries := make([]models.LogEntry, 0, len(logs))
 	now := time.Now()
 
 	for _, logReq := range logs {
-		matched := matchBillingConfigs(logReq, configs)
+		if h.tagCache != nil && logReq.Tag != "" {
+			_ = h.tagCache.EnsureTag(logReq.Tag)
+		}
+		isBillingTag := h.tagCache != nil && h.tagCache.IsBillingTag(logReq.Tag)
+		matched := matchBillingConfigs(logReq, idx)
 		if len(matched) > 0 {
 			date := time.Unix(logReq.Timestamp, 0).Format("2006-01-02")
+			tag := strings.TrimSpace(logReq.Tag)
 			for _, cfg := range matched {
-				key := date + "|" + cfg.BillKey
+				key := date + "|" + cfg.BillKey + "|" + tag
 				if agg[key] == nil {
 					agg[key] = &billingAggregate{}
 				}
 				agg[key].count++
 				agg[key].amount += cfg.UnitPrice
+			}
+		} else if isBillingTag {
+			date := time.Unix(logReq.Timestamp, 0).Format("2006-01-02")
+			tag := strings.TrimSpace(logReq.Tag)
+			key := date + "|" + tag
+			if unmatchedAgg[key] == nil {
+				unmatchedAgg[key] = &unmatchedAggregate{}
+			}
+			unmatchedAgg[key].count++
+			if unmatchedAgg[key].sampleLogLine == "" && len(logReq.LogLine) <= 500 {
+				unmatchedAgg[key].sampleLogLine = logReq.LogLine
 			}
 		} else {
 			logEntries = append(logEntries, models.LogEntry{
@@ -182,13 +258,19 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 		if len(agg) > 0 {
 			entries := make([]models.BillingEntry, 0, len(agg))
 			for key, v := range agg {
-				parts := strings.SplitN(key, "|", 2)
-				if len(parts) != 2 {
+				// key: date|bill_key|tag
+				parts := strings.SplitN(key, "|", 3)
+				if len(parts) < 2 {
 					continue
+				}
+				tag := ""
+				if len(parts) == 3 {
+					tag = parts[2]
 				}
 				entries = append(entries, models.BillingEntry{
 					Date:      parts[0],
 					BillKey:   parts[1],
+					Tag:       tag,
 					Count:     v.count,
 					Amount:    v.amount,
 					CreatedAt: now,
@@ -197,7 +279,7 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 			}
 			if len(entries) > 0 {
 				if err := tx.Clauses(clause.OnConflict{
-					Columns:   []clause.Column{{Name: "date"}, {Name: "bill_key"}},
+					Columns:   []clause.Column{{Name: "date"}, {Name: "bill_key"}, {Name: "tag"}},
 					DoUpdates: clause.Assignments(map[string]interface{}{
 						"count":      gorm.Expr("count + VALUES(`count`)"),
 						"amount":     gorm.Expr("amount + VALUES(`amount`)"),
@@ -209,6 +291,42 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 				for _, v := range agg {
 					successCount += int(v.count)
 				}
+			}
+		}
+		if len(unmatchedAgg) > 0 {
+			unmatchedEntries := make([]models.UnmatchedBillingLog, 0, len(unmatchedAgg))
+			for key, v := range unmatchedAgg {
+				parts := strings.SplitN(key, "|", 2)
+				if len(parts) != 2 {
+					continue
+				}
+				sample := v.sampleLogLine
+				if len(sample) > 500 {
+					sample = sample[:500]
+				}
+				unmatchedEntries = append(unmatchedEntries, models.UnmatchedBillingLog{
+					Date:          parts[0],
+					Tag:           parts[1],
+					Count:         v.count,
+					SampleLogLine: sample,
+					UpdatedAt:     now,
+				})
+			}
+			if len(unmatchedEntries) > 0 {
+				countExpr := "count + VALUES(count)" // MySQL
+				if database.DB.Dialector.Name() == "sqlite" {
+					countExpr = "count + excluded.count" // SQLite
+				}
+				if err := tx.Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "date"}, {Name: "tag"}},
+					DoUpdates: clause.Assignments(map[string]interface{}{
+						"count":      gorm.Expr(countExpr),
+						"updated_at": now,
+					}),
+				}).CreateInBatches(&unmatchedEntries, 50).Error; err != nil {
+					return err
+				}
+				_ = h.cleanupUnmatchedBillingLogs(tx)
 			}
 		}
 		if len(logEntries) > 0 {
@@ -269,10 +387,38 @@ type BatchReceiveLogResponse struct {
 	IDs     []uint `json:"ids"`     // 成功创建的ID列表
 }
 
-// billingAggregate 按 (date, bill_key) 聚合计费数据
+// billingAggregate 按 (date, bill_key, tag) 聚合计费数据
 type billingAggregate struct {
 	count  int64
 	amount float64
+}
+
+// unmatchedAggregate 无匹配规则的计费日志聚合
+type unmatchedAggregate struct {
+	count         int64
+	sampleLogLine string
+}
+
+// cleanupUnmatchedBillingLogs 清理无匹配规则表：删除 7 天前的记录，或当总数超过 10000 时删除最旧的
+func (h *LogHandler) cleanupUnmatchedBillingLogs(tx *gorm.DB) error {
+	cutoff := time.Now().AddDate(0, 0, -7).Format("2006-01-02")
+	if err := tx.Where("date < ?", cutoff).Delete(&models.UnmatchedBillingLog{}).Error; err != nil {
+		return err
+	}
+	var total int64
+	if err := tx.Model(&models.UnmatchedBillingLog{}).Count(&total).Error; err != nil {
+		return err
+	}
+	if total > 10000 {
+		var oldest []models.UnmatchedBillingLog
+		if err := tx.Order("date ASC, tag ASC").Limit(int(total - 10000)).Find(&oldest).Error; err != nil {
+			return err
+		}
+		for _, r := range oldest {
+			tx.Delete(&r)
+		}
+	}
+	return nil
 }
 
 // BatchReceiveLog 批量接收日志数据
@@ -487,7 +633,10 @@ func (h *LogHandler) UploadLog(c *gin.Context) {
 	// 限制请求体大小 10MB
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 10*1024*1024)
 
-	tag := c.PostForm("tag")
+	tag := strings.TrimSpace(c.PostForm("tag"))
+	if h.tagCache != nil && tag != "" {
+		_ = h.tagCache.EnsureTag(tag)
+	}
 
 	var lines []string
 

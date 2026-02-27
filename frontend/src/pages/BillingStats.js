@@ -8,6 +8,7 @@ import {
   Typography,
   message,
   Statistic,
+  Select,
 } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { SearchOutlined, SettingOutlined } from '@ant-design/icons';
@@ -25,11 +26,23 @@ const BillingStats = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState([]);
+  const [unmatchedData, setUnmatchedData] = useState([]);
   const [totalAmount, setTotalAmount] = useState(0);
   const [dateRange, setDateRange] = useState([
     dayjs().subtract(7, 'day'),
     dayjs(),
   ]);
+  const [selectedTags, setSelectedTags] = useState([]);
+  const [tagOptions, setTagOptions] = useState([]);
+
+  const loadTags = async () => {
+    try {
+      const res = await billingApi.getTags();
+      setTagOptions((res.data.data || []).map((v) => ({ label: v, value: v })));
+    } catch {
+      setTagOptions([]);
+    }
+  };
 
   const loadStats = async () => {
     if (!dateRange || dateRange.length !== 2) {
@@ -38,18 +51,30 @@ const BillingStats = () => {
     }
     setLoading(true);
     try {
-      const res = await billingApi.getStats({
-        start_date: dateRange[0].format('YYYY-MM-DD'),
-        end_date: dateRange[1].format('YYYY-MM-DD'),
-      });
-      setData(res.data.data || []);
-      setTotalAmount(res.data.total_amount || 0);
+      const start = dateRange[0].format('YYYY-MM-DD');
+      const end = dateRange[1].format('YYYY-MM-DD');
+      const [statsRes, unmatchedRes] = await Promise.all([
+        billingApi.getStats({
+          start_date: start,
+          end_date: end,
+          tags: selectedTags.length ? selectedTags : undefined,
+        }),
+        billingApi.getUnmatched({ start_date: start, end_date: end }),
+      ]);
+      setData(statsRes.data.data || []);
+      setTotalAmount(statsRes.data.total_amount || 0);
+      setUnmatchedData(unmatchedRes.data.data || []);
     } catch (err) {
       message.error('加载计费统计失败: ' + (err.response?.data?.message || err.message));
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    loadTags();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     loadStats();
@@ -68,6 +93,13 @@ const BillingStats = () => {
       title: '计费类型',
       dataIndex: 'bill_key',
       key: 'bill_key',
+    },
+    {
+      title: '标签',
+      dataIndex: 'tag',
+      key: 'tag',
+      width: 120,
+      render: (v) => (v || '-'),
     },
     {
       title: '数量',
@@ -103,6 +135,15 @@ const BillingStats = () => {
             onChange={setDateRange}
             format="YYYY-MM-DD"
           />
+          <Select
+            mode="multiple"
+            placeholder="按标签筛选（不选=全部）"
+            value={selectedTags}
+            onChange={setSelectedTags}
+            options={tagOptions}
+            allowClear
+            style={{ minWidth: 200 }}
+          />
           <Button
             type="primary"
             icon={<SearchOutlined />}
@@ -134,7 +175,7 @@ const BillingStats = () => {
         <Table
           columns={columns}
           dataSource={data}
-          rowKey={(r) => `${r.date}-${r.bill_key}`}
+          rowKey={(r) => `${r.date}-${r.bill_key}-${r.tag || ''}`}
           loading={loading}
           pagination={false}
         />
@@ -144,6 +185,32 @@ const BillingStats = () => {
           </Text>
         )}
       </Card>
+
+      {unmatchedData.length > 0 && (
+        <Card title="无匹配规则的计费日志" style={{ marginTop: 16 }}>
+          <p style={{ marginBottom: 16, color: 'var(--lm-text-secondary)' }}>
+            以下为归属计费项目但未匹配任何计费规则的日志，请前往「计费配置」新增规则。
+          </p>
+          <Table
+            columns={[
+              { title: '日期', dataIndex: 'date', key: 'date', width: 120 },
+              { title: '标签', dataIndex: 'tag', key: 'tag', width: 120 },
+              { title: '数量', dataIndex: 'count', key: 'count', width: 80 },
+              {
+                title: '示例日志',
+                dataIndex: 'sample_log_line',
+                key: 'sample_log_line',
+                ellipsis: true,
+                render: (v) => (v || '-'),
+              },
+            ]}
+            dataSource={unmatchedData}
+            rowKey={(r) => `${r.date}-${r.tag}`}
+            pagination={false}
+            size="small"
+          />
+        </Card>
+      )}
     </div>
   );
 };

@@ -87,6 +87,19 @@ const logApi = {
   },
 
   /**
+   * 获取标签管理列表（含项目信息、日志数）
+   * @returns {Promise} { tags: [{ tag, count, project_id, project_name, project_type }] }
+   */
+  getManagedTags: () => api.get('/logs/tags/managed'),
+
+  /**
+   * 设置标签所属项目
+   * @param {string} name - tag 名称
+   * @param {Object} data - { project_id: number | null }
+   */
+  setTagProject: (name, data) => api.put(`/logs/tags/${encodeURIComponent(name)}/project`, data),
+
+  /**
    * 获取所有规则名称列表
    * @returns {Promise} 规则名称列表
    */
@@ -117,6 +130,13 @@ const logApi = {
       timeout: 60000,
     });
   },
+};
+
+const tagProjectApi = {
+  list: () => api.get('/tag-projects'),
+  create: (data) => api.post('/tag-projects', data),
+  update: (id, data) => api.put(`/tag-projects/${id}`, data),
+  delete: (id) => api.delete(`/tag-projects/${id}`),
 };
 
 const metricsApi = {
@@ -173,6 +193,10 @@ const authApi = {
 };
 
 const billingApi = {
+  /** 获取计费标签列表（从 billing_entries 统计） */
+  getTags: () => api.get('/billing/tags'),
+  /** 获取计费项目下的 tag 列表（新增配置时需先选择） */
+  getBillingProjectTags: () => api.get('/billing/billing-project-tags'),
   /** 获取计费配置列表 */
   getConfigs: () => api.get('/billing/configs'),
   /** 新增计费配置 */
@@ -181,9 +205,21 @@ const billingApi = {
   updateConfig: (id, data) => api.put(`/billing/configs/${id}`, data),
   /** 删除计费配置 */
   deleteConfig: (id) => api.delete(`/billing/configs/${id}`),
-  /** 计费统计（参数：start_date, end_date 格式 YYYY-MM-DD） */
-  getStats: (params) => api.get('/billing/stats', { params }),
+  /** 计费统计（参数：start_date, end_date 格式 YYYY-MM-DD，可选 tags 数组） */
+  getStats: (params) => {
+    const { start_date, end_date, tags } = params;
+    let url = `/billing/stats?start_date=${encodeURIComponent(start_date)}&end_date=${encodeURIComponent(end_date)}`;
+    if (tags && tags.length) {
+      tags.forEach((t) => { url += `&tags=${encodeURIComponent(t)}`; });
+    }
+    return api.get(url);
+  },
+  /** 无匹配规则的计费日志（参数：start_date, end_date） */
+  getUnmatched: (params) =>
+    api.get('/billing/unmatched', {
+      params: { start_date: params.start_date, end_date: params.end_date },
+    }),
 };
 
-export { logApi, metricsApi, dashboardApi, authApi, billingApi };
+export { logApi, metricsApi, dashboardApi, authApi, billingApi, tagProjectApi };
 export default api;

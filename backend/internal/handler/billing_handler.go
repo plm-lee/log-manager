@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"log-manager/internal/database"
@@ -41,6 +42,7 @@ type CreateConfigRequest struct {
 	BillKey     string  `json:"bill_key" binding:"required"`
 	MatchType   string  `json:"match_type" binding:"required,oneof=tag rule_name log_line_contains"`
 	MatchValue  string  `json:"match_value" binding:"required"`
+	TagScope    string  `json:"tag_scope"` // 可选，逗号分隔的 tag 列表；rule_name/log_line_contains 时仅对 scope 内 tag 生效
 	UnitPrice   float64 `json:"unit_price" binding:"gte=0"` // 允许 0（免费），required 对 float64 零值会报错
 	Description string  `json:"description"`
 }
@@ -59,6 +61,7 @@ func (h *BillingHandler) CreateConfig(c *gin.Context) {
 		BillKey:     req.BillKey,
 		MatchType:   req.MatchType,
 		MatchValue:  req.MatchValue,
+		TagScope:    strings.TrimSpace(req.TagScope),
 		UnitPrice:   req.UnitPrice,
 		Description: req.Description,
 	}
@@ -77,6 +80,7 @@ type UpdateConfigRequest struct {
 	BillKey     string  `json:"bill_key" binding:"required"`
 	MatchType   string  `json:"match_type" binding:"required,oneof=tag rule_name log_line_contains"`
 	MatchValue  string  `json:"match_value" binding:"required"`
+	TagScope    string  `json:"tag_scope"` // 可选，逗号分隔的 tag 列表
 	UnitPrice   float64 `json:"unit_price" binding:"gte=0"` // 允许 0（免费）
 	Description string  `json:"description"`
 }
@@ -104,6 +108,7 @@ func (h *BillingHandler) UpdateConfig(c *gin.Context) {
 	config.BillKey = req.BillKey
 	config.MatchType = req.MatchType
 	config.MatchValue = req.MatchValue
+	config.TagScope = strings.TrimSpace(req.TagScope)
 	config.UnitPrice = req.UnitPrice
 	config.Description = req.Description
 	if err := h.db.Save(&config).Error; err != nil {
@@ -114,6 +119,25 @@ func (h *BillingHandler) UpdateConfig(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": config})
+}
+
+// GetTags 从 billing_entries 获取实际产生计费记录的标签列表，供前端下拉选择
+func (h *BillingHandler) GetTags(c *gin.Context) {
+	var values []string
+	if err := h.db.Model(&models.BillingEntry{}).
+		Where("tag != ''").
+		Distinct("tag").
+		Pluck("tag", &values).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "查询标签失败",
+			"message": err.Error(),
+		})
+		return
+	}
+	if values == nil {
+		values = []string{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": values})
 }
 
 // DeleteConfig 删除计费配置
@@ -137,6 +161,7 @@ func (h *BillingHandler) DeleteConfig(c *gin.Context) {
 type BillingStatItem struct {
 	Date      string  `json:"date"`
 	BillKey   string  `json:"bill_key"`
+	Tag       string  `json:"tag"`
 	Count     int64   `json:"count"`
 	UnitPrice float64 `json:"unit_price"`
 	Amount    float64 `json:"amount"`
@@ -146,6 +171,30 @@ type BillingStatItem struct {
 type GetStatsResponse struct {
 	Data        []BillingStatItem `json:"data"`
 	TotalAmount float64           `json:"total_amount"`
+}
+
+// GetUnmatched 获取无匹配规则的计费日志（按日期范围）
+func (h *BillingHandler) GetUnmatched(c *gin.Context) {
+	startDate := c.Query("start_date")
+	endDate := c.Query("end_date")
+	if startDate == "" || endDate == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "缺少参数",
+			"message": "start_date 和 end_date 为必填",
+		})
+		return
+	}
+	var list []models.UnmatchedBillingLog
+	if err := h.db.Where("date >= ? AND date <= ?", startDate, endDate).
+		Order("date DESC, count DESC").
+		Find(&list).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "查询失败",
+			"message": err.Error(),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 
 // GetStats 计费统计
@@ -175,11 +224,25 @@ func (h *BillingHandler) GetStats(c *gin.Context) {
 		return
 	}
 
+	// 可选 tags 过滤：直接按 billing_entries.tag 过滤
+	tags := c.QueryArray("tags")
+	var tagFilter []string
+	if len(tags) > 0 {
+		for _, t := range tags {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				tagFilter = append(tagFilter, t)
+			}
+		}
+	}
+
 	var entries []models.BillingEntry
-	if err := h.db.Model(&models.BillingEntry{}).
-		Where("date >= ? AND date <= ?", startDate, endDate).
-		Order("date ASC, bill_key ASC").
-		Find(&entries).Error; err != nil {
+	q := h.db.Model(&models.BillingEntry{}).
+		Where("date >= ? AND date <= ?", startDate, endDate)
+	if len(tagFilter) > 0 {
+		q = q.Where("tag IN ?", tagFilter)
+	}
+	if err := q.Order("date ASC, bill_key ASC").Find(&entries).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "统计失败",
 			"message": err.Error(),
@@ -197,6 +260,7 @@ func (h *BillingHandler) GetStats(c *gin.Context) {
 		result = append(result, BillingStatItem{
 			Date:      e.Date,
 			BillKey:   e.BillKey,
+			Tag:       e.Tag,
 			Count:     e.Count,
 			UnitPrice: unitPrice,
 			Amount:    e.Amount,
