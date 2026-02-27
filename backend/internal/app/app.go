@@ -14,6 +14,7 @@ import (
 	"log-manager/internal/handler"
 	"log-manager/internal/middleware"
 	"log-manager/internal/models"
+	"log-manager/internal/udpserver"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -22,8 +23,10 @@ import (
 // App 应用结构体
 // 负责管理整个应用的初始化和运行
 type App struct {
-	cfg    *config.Config
-	router *gin.Engine
+	cfg       *config.Config
+	router    *gin.Engine
+	logHandler *handler.LogHandler
+	udpServer interface{ Stop() }
 }
 
 // GetRouter 获取路由引擎
@@ -53,7 +56,26 @@ func (a *App) Init() error {
 	// 初始化路由
 	a.initRouter()
 
+	// 启动 UDP 日志接收（若配置启用）
+	if a.cfg.UDP.Enabled {
+		srv, err := udpserver.Start(&a.cfg.UDP, a.logHandler)
+		if err != nil {
+			return fmt.Errorf("启动UDP日志接收失败: %w", err)
+		}
+		if srv != nil {
+			a.udpServer = srv
+		}
+	}
+
 	return nil
+}
+
+// StopUDPServer 停止 UDP 服务（优雅关闭时调用）
+func (a *App) StopUDPServer() {
+	if a.udpServer != nil {
+		a.udpServer.Stop()
+		a.udpServer = nil
+	}
 }
 
 // initRouter 初始化路由
@@ -78,7 +100,8 @@ func (a *App) initRouter() {
 	}
 
 	// 创建处理器实例
-	logHandler := handler.NewLogHandler()
+	a.logHandler = handler.NewLogHandler()
+	logHandler := a.logHandler
 	metricsHandler := handler.NewMetricsHandler()
 	dashboardHandler := handler.NewDashboardHandler()
 	billingHandler := handler.NewBillingHandler()

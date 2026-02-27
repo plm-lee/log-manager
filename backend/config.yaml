@@ -42,6 +42,16 @@ rate_limit:
   batch_rate: 1000 # 批量接口（/logs/batch、/metrics/batch）每秒请求数，支撑亿级吞吐
   batch_capacity: 2000
 
+# UDP 日志接收配置（可选，与 HTTP 并存；enabled=false 时不启动）
+udp:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8889
+  secret: "" # 可选，非空时校验 payload 中的 secret/api_key
+  buffer_size: 10000 # 内存缓冲条数
+  flush_interval: "100ms" # 批量落库间隔
+  flush_size: 500 # 达到该条数立即落库
+
 # 认证配置
 auth:
   api_key: "" # API Key，agent 上报使用；为空则 agent 接口不做认证

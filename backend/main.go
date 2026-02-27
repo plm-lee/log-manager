@@ -74,6 +74,9 @@ func main() {
 		log.Fatalf("服务器强制关闭: %v", err)
 	}
 
+	// 停止 UDP 日志接收
+	application.StopUDPServer()
+
 	// 关闭数据库连接
 	if err := database.Close(); err != nil {
 		log.Printf("关闭数据库连接失败: %v", err)

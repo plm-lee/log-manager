@@ -16,6 +16,18 @@ type Config struct {
 	CORS             CORSConfig      `yaml:"cors"`               // CORS 配置
 	RateLimit        RateLimitConfig `yaml:"rate_limit"`         // 限流配置
 	Auth             AuthConfig      `yaml:"auth"`               // 认证配置
+	UDP              UDPConfig       `yaml:"udp"`                // UDP 日志接收配置
+}
+
+// UDPConfig UDP 日志接收配置
+type UDPConfig struct {
+	Enabled       bool   `yaml:"enabled"`        // 是否启用 UDP 接收
+	Host          string `yaml:"host"`           // 监听地址
+	Port          int    `yaml:"port"`           // 监听端口
+	Secret        string `yaml:"secret"`         // 可选，非空时校验 payload 中的 secret/api_key
+	BufferSize    int    `yaml:"buffer_size"`    // 内存缓冲条数
+	FlushInterval string `yaml:"flush_interval"` // 批量落库间隔，如 100ms
+	FlushSize     int    `yaml:"flush_size"`     // 达到该条数立即落库
 }
 
 // AuthConfig 认证配置
@@ -124,6 +136,21 @@ func LoadConfig(filePath string) (*Config, error) {
 	}
 	if cfg.Auth.JWTSecret == "" && cfg.Auth.LoginEnabled {
 		cfg.Auth.JWTSecret = "log-manager-default-secret-change-in-production"
+	}
+	if cfg.UDP.Host == "" {
+		cfg.UDP.Host = "0.0.0.0"
+	}
+	if cfg.UDP.Port <= 0 {
+		cfg.UDP.Port = 8889
+	}
+	if cfg.UDP.BufferSize <= 0 {
+		cfg.UDP.BufferSize = 10000
+	}
+	if cfg.UDP.FlushInterval == "" {
+		cfg.UDP.FlushInterval = "100ms"
+	}
+	if cfg.UDP.FlushSize <= 0 {
+		cfg.UDP.FlushSize = 500
 	}
 
 	return &cfg, nil

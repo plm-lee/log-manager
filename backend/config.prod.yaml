@@ -34,6 +34,16 @@ rate_limit:
   batch_rate: 1000
   batch_capacity: 2000
 
+# UDP 日志接收（可选）
+# udp:
+#   enabled: true
+#   host: "0.0.0.0"
+#   port: 8889
+#   secret: "your-secret"
+#   buffer_size: 10000
+#   flush_interval: "100ms"
+#   flush_size: 500
+
 # 认证配置（生产环境建议启用登录）
 auth:
   api_key: ""

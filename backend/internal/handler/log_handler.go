@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -111,7 +112,7 @@ func (h *LogHandler) upsertBillingEntry(date string, billKey string, addCount in
 }
 
 // ReceiveLogRequest 接收日志请求结构体
-// 对应 log-filter-monitor 上报的日志数据格式
+// 对应 log-filter-monitor 上报的日志数据格式（HTTP 与 UDP 共用）
 type ReceiveLogRequest struct {
 	Timestamp int64  `json:"timestamp" binding:"required"` // 时间戳
 	RuleName  string `json:"rule_name"`                    // 规则名称
@@ -120,6 +121,108 @@ type ReceiveLogRequest struct {
 	LogFile   string `json:"log_file"`                     // 日志文件路径
 	Pattern   string `json:"pattern"`                      // 匹配模式
 	Tag       string `json:"tag"`                          // 标签
+	Secret    string `json:"secret"`                       // UDP 认证密钥（可选，与 udp.secret 一致时校验）
+	APIKey    string `json:"api_key"`                      // 同 secret，兼容两种字段名
+	Transport string `json:"-"`                            // 来源：http / udp，内部标记，不入库
+}
+
+// ProcessLogBatch 批量处理日志（计费分流 + 入库），供 HTTP 与 UDP 共用
+// 返回：成功数、失败数、非计费日志的 ID 列表、错误
+func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, failedCount int, ids []uint, err error) {
+	if len(logs) == 0 {
+		return 0, 0, nil, nil
+	}
+	transport := "http"
+	if len(logs) > 0 && logs[0].Transport != "" {
+		transport = logs[0].Transport
+	}
+	log.Printf("[log] 收到 %d 条日志，来源: %s", len(logs), transport)
+	if len(logs) > 100 {
+		logs = logs[:100] // 单次最多处理 100 条
+	}
+
+	configs, err := h.bccache.get(h.db)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+
+	agg := make(map[string]*billingAggregate)
+	logEntries := make([]models.LogEntry, 0, len(logs))
+	now := time.Now()
+
+	for _, logReq := range logs {
+		matched := matchBillingConfigs(logReq, configs)
+		if len(matched) > 0 {
+			date := time.Unix(logReq.Timestamp, 0).Format("2006-01-02")
+			for _, cfg := range matched {
+				key := date + "|" + cfg.BillKey
+				if agg[key] == nil {
+					agg[key] = &billingAggregate{}
+				}
+				agg[key].count++
+				agg[key].amount += cfg.UnitPrice
+			}
+		} else {
+			logEntries = append(logEntries, models.LogEntry{
+				Timestamp: logReq.Timestamp,
+				RuleName:  logReq.RuleName,
+				RuleDesc:  logReq.RuleDesc,
+				LogLine:   logReq.LogLine,
+				LogFile:   logReq.LogFile,
+				Pattern:   logReq.Pattern,
+				Tag:       logReq.Tag,
+				Source:    "agent",
+				CreatedAt: now,
+				UpdatedAt: now,
+			})
+		}
+	}
+
+	err = h.db.Transaction(func(tx *gorm.DB) error {
+		if len(agg) > 0 {
+			entries := make([]models.BillingEntry, 0, len(agg))
+			for key, v := range agg {
+				parts := strings.SplitN(key, "|", 2)
+				if len(parts) != 2 {
+					continue
+				}
+				entries = append(entries, models.BillingEntry{
+					Date:      parts[0],
+					BillKey:   parts[1],
+					Count:     v.count,
+					Amount:    v.amount,
+					CreatedAt: now,
+					UpdatedAt: now,
+				})
+			}
+			if len(entries) > 0 {
+				if err := tx.Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "date"}, {Name: "bill_key"}},
+					DoUpdates: clause.Assignments(map[string]interface{}{
+						"count":      gorm.Expr("count + VALUES(`count`)"),
+						"amount":     gorm.Expr("amount + VALUES(`amount`)"),
+						"updated_at": now,
+					}),
+				}).CreateInBatches(&entries, 100).Error; err != nil {
+					return err
+				}
+				for _, v := range agg {
+					successCount += int(v.count)
+				}
+			}
+		}
+		if len(logEntries) > 0 {
+			if err := tx.CreateInBatches(&logEntries, 50).Error; err != nil {
+				return err
+			}
+			successCount += len(logEntries)
+			for i := range logEntries {
+				ids = append(ids, logEntries[i].ID)
+			}
+		}
+		return nil
+	})
+	return successCount, failedCount, ids, err
 }
 
 // ReceiveLog 接收日志数据
@@ -134,58 +237,22 @@ func (h *LogHandler) ReceiveLog(c *gin.Context) {
 		})
 		return
 	}
-
-	configs, err := h.bccache.get(h.db)
+	req.Transport = "http"
+	successCount, _, ids, err := h.ProcessLogBatch([]ReceiveLogRequest{req})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "查询计费配置失败",
-			"message": err.Error(),
-		})
-		return
-	}
-
-	matched := matchBillingConfigs(req, configs)
-	if len(matched) > 0 {
-		date := time.Unix(req.Timestamp, 0).Format("2006-01-02")
-		for _, cfg := range matched {
-			if err := h.upsertBillingEntry(date, cfg.BillKey, 1, cfg.UnitPrice); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"error":   "保存计费数据失败",
-					"message": err.Error(),
-				})
-				return
-			}
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"id":      nil,
-		})
-		return
-	}
-
-	// 非计费日志写入 log_entries
-	logEntry := models.LogEntry{
-		Timestamp: req.Timestamp,
-		RuleName:  req.RuleName,
-		RuleDesc:  req.RuleDesc,
-		LogLine:   req.LogLine,
-		LogFile:   req.LogFile,
-		Pattern:   req.Pattern,
-		Tag:       req.Tag,
-		Source:    "agent",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-	if err := h.db.Create(&logEntry).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "保存日志失败",
 			"message": err.Error(),
 		})
 		return
 	}
+	var respID interface{}
+	if len(ids) > 0 {
+		respID = ids[0]
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"id":      logEntry.ID,
+		"success": successCount > 0,
+		"id":      respID,
 	})
 }
 
@@ -228,102 +295,10 @@ func (h *LogHandler) BatchReceiveLog(c *gin.Context) {
 		})
 		return
 	}
-
-	configs, err := h.bccache.get(h.db)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "查询计费配置失败",
-			"message": err.Error(),
-		})
-		return
+	for i := range req.Logs {
+		req.Logs[i].Transport = "http"
 	}
-
-	// 分流：计费日志聚合计费表，非计费日志进 log_entries
-	agg := make(map[string]*billingAggregate) // key: date + "|" + bill_key
-	logEntries := make([]models.LogEntry, 0, len(req.Logs))
-	now := time.Now()
-
-	for _, logReq := range req.Logs {
-		matched := matchBillingConfigs(logReq, configs)
-		if len(matched) > 0 {
-			date := time.Unix(logReq.Timestamp, 0).Format("2006-01-02")
-			for _, cfg := range matched {
-				key := date + "|" + cfg.BillKey
-				if agg[key] == nil {
-					agg[key] = &billingAggregate{}
-				}
-				agg[key].count++
-				agg[key].amount += cfg.UnitPrice
-			}
-		} else {
-			logEntries = append(logEntries, models.LogEntry{
-				Timestamp: logReq.Timestamp,
-				RuleName:  logReq.RuleName,
-				RuleDesc:  logReq.RuleDesc,
-				LogLine:   logReq.LogLine,
-				LogFile:   logReq.LogFile,
-				Pattern:   logReq.Pattern,
-				Tag:       logReq.Tag,
-				Source:    "agent",
-				CreatedAt: now,
-				UpdatedAt: now,
-			})
-		}
-	}
-
-	// 批量写入计费聚合数据 + 非计费日志，使用事务保证原子性
-	var successIDs []uint
-	successCount := 0
-	failedCount := 0
-
-	err = h.db.Transaction(func(tx *gorm.DB) error {
-		// 1. 批量 upsert 计费数据
-		if len(agg) > 0 {
-			entries := make([]models.BillingEntry, 0, len(agg))
-			for key, v := range agg {
-				parts := strings.SplitN(key, "|", 2)
-				if len(parts) != 2 {
-					continue
-				}
-				entries = append(entries, models.BillingEntry{
-					Date:      parts[0],
-					BillKey:   parts[1],
-					Count:     v.count,
-					Amount:    v.amount,
-					CreatedAt: now,
-					UpdatedAt: now,
-				})
-			}
-			if len(entries) > 0 {
-				if err := tx.Clauses(clause.OnConflict{
-					Columns:   []clause.Column{{Name: "date"}, {Name: "bill_key"}},
-					DoUpdates: clause.Assignments(map[string]interface{}{
-						"count":      gorm.Expr("count + VALUES(`count`)"),
-						"amount":     gorm.Expr("amount + VALUES(`amount`)"),
-						"updated_at": now,
-					}),
-				}).CreateInBatches(&entries, 100).Error; err != nil {
-					return err
-				}
-				for _, v := range agg {
-					successCount += int(v.count)
-				}
-			}
-		}
-
-		// 2. 批量保存非计费日志
-		if len(logEntries) > 0 {
-			if err := tx.CreateInBatches(&logEntries, 50).Error; err != nil {
-				return err
-			}
-			successCount += len(logEntries)
-			for i := range logEntries {
-				successIDs = append(successIDs, logEntries[i].ID)
-			}
-		}
-		return nil
-	})
-
+	successCount, failedCount, successIDs, err := h.ProcessLogBatch(req.Logs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "保存日志失败",
