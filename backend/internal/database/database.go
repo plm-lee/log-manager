@@ -17,6 +17,9 @@ import (
 // DB 全局数据库实例
 var DB *gorm.DB
 
+// Type 数据库类型（sqlite / mysql），用于全文检索等分支
+var Type string
+
 // Init 初始化数据库连接
 // cfg: 数据库配置
 // 返回: 错误信息
@@ -24,6 +27,7 @@ func Init(cfg *config.DatabaseConfig) error {
 	var err error
 	var dialector gorm.Dialector
 
+	Type = cfg.Type
 	// 根据数据库类型创建连接器
 	switch cfg.Type {
 	case "sqlite":
@@ -79,6 +83,9 @@ func Init(cfg *config.DatabaseConfig) error {
 		&models.AgentConfig{},
 		&models.TagProject{},
 		&models.Tag{},
+		&models.RuleName{},
+		&models.TagLogCount{},
+		&models.DashboardStat{},
 	); err != nil {
 		return fmt.Errorf("数据库迁移失败: %w", err)
 	}
@@ -93,6 +100,50 @@ func Init(cfg *config.DatabaseConfig) error {
 		return fmt.Errorf("迁移 billing_tag 失败: %w", err)
 	}
 
+	// 全文检索索引（替代 log_line LIKE '%keyword%' 慢查询）
+	if err := ensureFullTextSearch(cfg.Type); err != nil {
+		return fmt.Errorf("初始化全文检索失败: %w", err)
+	}
+
+	return nil
+}
+
+// ensureFullTextSearch 根据数据库类型创建全文检索索引
+func ensureFullTextSearch(dbType string) error {
+	switch dbType {
+	case "mysql":
+		// MySQL FULLTEXT 索引，已存在则忽略错误
+		if err := DB.Exec("ALTER TABLE log_entries ADD FULLTEXT INDEX ft_log_line(log_line)").Error; err != nil {
+			if strings.Contains(err.Error(), "Duplicate") || strings.Contains(err.Error(), "1061") {
+				return nil // 索引已存在
+			}
+			return err
+		}
+	case "sqlite":
+		// SQLite FTS5 虚拟表
+		if err := DB.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS log_entries_fts USING fts5(log_line, content='log_entries', content_rowid='id')`).Error; err != nil {
+			return err
+		}
+		// 触发器保持 FTS 与主表同步（忽略已存在错误）
+		for _, tr := range []string{
+			`CREATE TRIGGER IF NOT EXISTS log_entries_fts_insert AFTER INSERT ON log_entries BEGIN
+				INSERT INTO log_entries_fts(rowid, log_line) VALUES (new.id, new.log_line);
+			END`,
+			`CREATE TRIGGER IF NOT EXISTS log_entries_fts_delete AFTER DELETE ON log_entries BEGIN
+				INSERT INTO log_entries_fts(log_entries_fts, rowid, log_line) VALUES ('delete', old.id, old.log_line);
+			END`,
+			`CREATE TRIGGER IF NOT EXISTS log_entries_fts_update AFTER UPDATE ON log_entries BEGIN
+				INSERT INTO log_entries_fts(log_entries_fts, rowid, log_line) VALUES ('delete', old.id, old.log_line);
+				INSERT INTO log_entries_fts(rowid, log_line) VALUES (new.id, new.log_line);
+			END`,
+		} {
+			if err := DB.Exec(tr).Error; err != nil && !strings.Contains(err.Error(), "already exists") {
+				return err
+			}
+		}
+		// 回填已有数据到 FTS（content 表模式下 rebuild 会从 content 表重建）
+		_ = DB.Exec(`INSERT INTO log_entries_fts(log_entries_fts) VALUES ('rebuild')`).Error
+	}
 	return nil
 }
 
@@ -100,7 +151,7 @@ func Init(cfg *config.DatabaseConfig) error {
 // match_type=tag 时用 match_value；否则用 tag_scope 首个值
 func migrateBillingConfigBillingTag() error {
 	var configs []models.BillingConfig
-	if err := DB.Where("billing_tag = '' OR billing_tag IS NULL").Find(&configs).Error; err != nil {
+	if err := DB.Where("billing_tag = '' OR billing_tag IS NULL").Limit(1000).Find(&configs).Error; err != nil {
 		return err
 	}
 	for _, cfg := range configs {

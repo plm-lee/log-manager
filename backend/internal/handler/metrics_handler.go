@@ -505,19 +505,20 @@ func (h *MetricsHandler) QueryMetricsStats(c *gin.Context) {
 		intervalSec = 3600 // 默认1小时
 	}
 
-	// 构建查询
-	query := h.db.Model(&models.MetricsEntry{})
-
-	// 应用筛选条件
-	if req.Tag != "" {
-		query = query.Where("tag = ?", req.Tag)
+	// SQL 层时间桶聚合，避免全量 Find 慢查询
+	type bucketRow struct {
+		BucketTs   int64 `gorm:"column:bucket_ts"`
+		TotalCount int64 `gorm:"column:total_count"`
 	}
-	query = query.Where("timestamp >= ?", req.StartTime)
-	query = query.Where("timestamp <= ?", req.EndTime)
-
-	// 查询所有符合条件的指标
-	var metrics []models.MetricsEntry
-	if err := query.Order("timestamp ASC").Find(&metrics).Error; err != nil {
+	var bucketRows []bucketRow
+	sql := "SELECT (timestamp / ?) * ? as bucket_ts, SUM(total_count) as total_count FROM metrics_entries WHERE deleted_at IS NULL AND timestamp >= ? AND timestamp <= ?"
+	args := []interface{}{intervalSec, intervalSec, req.StartTime, req.EndTime}
+	if req.Tag != "" {
+		sql += " AND tag = ?"
+		args = append(args, req.Tag)
+	}
+	sql += " GROUP BY 1 ORDER BY 1 ASC"
+	if err := h.db.Raw(sql, args...).Scan(&bucketRows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "查询指标失败",
 			"message": err.Error(),
@@ -525,14 +526,33 @@ func (h *MetricsHandler) QueryMetricsStats(c *gin.Context) {
 		return
 	}
 
-	// 按时间间隔聚合数据
+	// 构建按桶的 TotalCount，RuleCounts 需要从明细行合并
 	statsMap := make(map[int64]*MetricsStatsData)
+	for _, r := range bucketRows {
+		statsMap[r.BucketTs] = &MetricsStatsData{
+			Time:       r.BucketTs,
+			TimeStr:    time.Unix(r.BucketTs, 0).Format("2006-01-02 15:04:05"),
+			TotalCount: r.TotalCount,
+			RuleCounts: make(map[string]int64),
+		}
+	}
 
+	// 拉取有限明细行用于合并 RuleCounts（Limit 50000 防止大范围锁表）
+	var metrics []models.MetricsEntry
+	detailQ := h.db.Model(&models.MetricsEntry{}).
+		Where("timestamp >= ? AND timestamp <= ?", req.StartTime, req.EndTime)
+	if req.Tag != "" {
+		detailQ = detailQ.Where("tag = ?", req.Tag)
+	}
+	if err := detailQ.Order("timestamp ASC").Limit(50000).Find(&metrics).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "查询指标失败",
+			"message": err.Error(),
+		})
+		return
+	}
 	for _, m := range metrics {
-		// 对齐时间戳到间隔
-		alignedTime := m.Timestamp - (m.Timestamp % intervalSec)
-
-		// 获取或创建统计对象
+		alignedTime := (m.Timestamp / intervalSec) * intervalSec
 		stat, exists := statsMap[alignedTime]
 		if !exists {
 			stat = &MetricsStatsData{
@@ -543,27 +563,19 @@ func (h *MetricsHandler) QueryMetricsStats(c *gin.Context) {
 			}
 			statsMap[alignedTime] = stat
 		}
-
-		// 解析规则计数
 		var ruleCounts map[string]int64
 		if err := json.Unmarshal([]byte(m.RuleCounts), &ruleCounts); err != nil {
 			ruleCounts = make(map[string]int64)
 		}
-
-		// 累加计数
-		stat.TotalCount += m.TotalCount
 		for ruleName, count := range ruleCounts {
 			stat.RuleCounts[ruleName] += count
 		}
 	}
 
-	// 转换为数组并按时间排序
 	stats := make([]MetricsStatsData, 0, len(statsMap))
 	for _, stat := range statsMap {
 		stats = append(stats, *stat)
 	}
-
-	// 按时间排序
 	for i := 0; i < len(stats)-1; i++ {
 		for j := i + 1; j < len(stats); j++ {
 			if stats[i].Time > stats[j].Time {

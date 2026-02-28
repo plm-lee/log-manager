@@ -13,6 +13,7 @@ import (
 	"log-manager/internal/app"
 	"log-manager/internal/cleanup"
 	"log-manager/internal/config"
+	"log-manager/internal/dashstats"
 	"log-manager/internal/database"
 )
 
@@ -48,6 +49,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go cleanup.StartRetentionJob(ctx, cfg)
+	go dashstats.StartRefreshJob(ctx)
 
 	// 在 goroutine 中启动服务器
 	go func() {

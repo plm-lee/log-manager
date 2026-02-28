@@ -8,6 +8,7 @@ import (
 	"log-manager/internal/models"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Cache tag 名称内存缓存，用于快速判断 tag 是否已存在
@@ -73,39 +74,99 @@ func (c *Cache) Reload() error {
 	return c.LoadFromDB()
 }
 
-// BackfillFromLegacyTables 从 log_entries、billing_entries 回填历史 tag 到 tags 表（首次部署时调用）
+// parseTags 解析逗号分隔的 tag 字符串
+func parseTags(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		t := strings.TrimSpace(p)
+		if t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// BackfillFromLegacyTables 从 log_entries、billing_entries 分页回填历史 tag 到 tags 表（首次部署时调用）
+// 避免全表 Distinct 慢查询，改用分页扫描 + 批量插入
 func (c *Cache) BackfillFromLegacyTables() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.set) > 0 {
-		return nil // 已有数据，无需回填
-	}
-	var names []string
-	if err := c.db.Table("log_entries").Where("tag != '' AND tag IS NOT NULL").Distinct("tag").Pluck("tag", &names).Error; err != nil {
-		return err
+		return nil
 	}
 	seen := make(map[string]struct{})
-	for _, n := range names {
-		n = strings.TrimSpace(n)
-		if n != "" {
-			seen[n] = struct{}{}
+	// 分页扫描 log_entries
+	var maxID uint
+	for {
+		var rows []struct {
+			ID  uint
+			Tag string
 		}
-	}
-	var billingTags []string
-	if err := c.db.Table("billing_entries").Where("tag != ''").Distinct("tag").Pluck("tag", &billingTags).Error; err != nil {
-		return err
-	}
-	for _, n := range billingTags {
-		n = strings.TrimSpace(n)
-		if n != "" {
-			seen[n] = struct{}{}
-		}
-	}
-	for name := range seen {
-		if err := c.db.Where("name = ?", name).FirstOrCreate(&models.Tag{Name: name}).Error; err != nil {
+		if err := c.db.Table("log_entries").Select("id, tag").
+			Where("deleted_at IS NULL AND tag != '' AND tag IS NOT NULL AND id > ?", maxID).
+			Order("id ASC").
+			Limit(5000).
+			Scan(&rows).Error; err != nil {
 			return err
 		}
+		if len(rows) == 0 {
+			break
+		}
+		for _, r := range rows {
+			for _, t := range parseTags(r.Tag) {
+				seen[t] = struct{}{}
+			}
+			if r.ID > maxID {
+				maxID = r.ID
+			}
+		}
+		if len(rows) < 5000 {
+			break
+		}
+	}
+	// 分页扫描 billing_entries
+	maxID = 0
+	for {
+		var rows []struct {
+			ID  uint
+			Tag string
+		}
+		if err := c.db.Table("billing_entries").Select("id, tag").
+			Where("tag != '' AND id > ?", maxID).
+			Order("id ASC").
+			Limit(5000).
+			Scan(&rows).Error; err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			break
+		}
+		for _, r := range rows {
+			for _, t := range parseTags(r.Tag) {
+				seen[t] = struct{}{}
+			}
+			if r.ID > maxID {
+				maxID = r.ID
+			}
+		}
+		if len(rows) < 5000 {
+			break
+		}
+	}
+	// 批量插入 tags（ON CONFLICT DO NOTHING）
+	tags := make([]models.Tag, 0, len(seen))
+	for name := range seen {
+		tags = append(tags, models.Tag{Name: name})
 		c.set[name] = struct{}{}
+	}
+	if len(tags) > 0 {
+		if err := c.db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "name"}}, DoNothing: true}).CreateInBatches(tags, 100).Error; err != nil {
+			return err
+		}
 	}
 	if len(seen) > 0 {
 		log.Printf("[tagcache] 从历史表回填 %d 个 tag", len(seen))

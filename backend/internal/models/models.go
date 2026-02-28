@@ -116,6 +116,44 @@ func (Tag) TableName() string {
 	return "tags"
 }
 
+// RuleName 规则名称（独立存储，替代 log_entries.Distinct rule_name 慢查询）
+type RuleName struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	Name      string    `gorm:"size:255;uniqueIndex;not null" json:"name"`
+	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
+}
+
+func (RuleName) TableName() string {
+	return "rule_names"
+}
+
+// TagLogCount 标签日志数（写入时更新，替代 Group by tag 慢查询）
+type TagLogCount struct {
+	Tag         string    `gorm:"size:100;primaryKey" json:"tag"`
+	Count       int64     `gorm:"not null" json:"count"`
+	LastUpdated time.Time `json:"last_updated"`
+}
+
+func (TagLogCount) TableName() string {
+	return "tag_log_counts"
+}
+
+// DashboardStat Dashboard 汇总统计（定时任务更新，替代全表 Count）
+type DashboardStat struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	TotalLogs      int64     `gorm:"not null" json:"total_logs"`
+	TotalMetrics   int64     `gorm:"not null" json:"total_metrics"`
+	TodayLogs      int64     `gorm:"not null" json:"today_logs"`
+	TodayMetrics   int64     `gorm:"not null" json:"today_metrics"`
+	DistinctTags   int64     `gorm:"not null" json:"distinct_tags"`
+	DistinctRules  int64     `gorm:"not null" json:"distinct_rules"`
+	LastUpdated    time.Time `json:"last_updated"`
+}
+
+func (DashboardStat) TableName() string {
+	return "dashboard_stats"
+}
+
 // AgentConfig Agent 配置下发（供 log-filter-monitor 拉取）
 // agent_id 为 "default" 时作为默认配置
 type AgentConfig struct {

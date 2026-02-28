@@ -14,7 +14,9 @@ import (
 	"log-manager/internal/handler"
 	"log-manager/internal/middleware"
 	"log-manager/internal/models"
+	"log-manager/internal/rulecache"
 	"log-manager/internal/tagcache"
+	"log-manager/internal/taglogcount"
 	"log-manager/internal/tcpserver"
 	"log-manager/internal/udpserver"
 	"log-manager/internal/unmatchedqueue"
@@ -66,11 +68,23 @@ func (a *App) Init() error {
 		log.Printf("[warn] 回填历史 tag 失败: %v", err)
 	}
 
+	// 初始化 RuleName 缓存
+	rc := rulecache.New(database.DB)
+	if err := rc.LoadFromDB(); err != nil {
+		return fmt.Errorf("加载 rule_name 缓存失败: %w", err)
+	}
+	if err := rc.BackfillFromLogEntries(); err != nil {
+		log.Printf("[warn] 回填历史 rule_name 失败: %v", err)
+	}
+	if err := taglogcount.BackfillFromLogEntries(database.DB); err != nil {
+		log.Printf("[warn] 回填 tag_log_counts 失败: %v", err)
+	}
+
 	// 初始化无匹配规则队列
 	unmatchedQueue := unmatchedqueue.New(5000)
 
 	// 初始化路由
-	a.initRouter(tc, unmatchedQueue)
+	a.initRouter(tc, rc, unmatchedQueue)
 
 	// 启动 UDP 日志接收（若配置启用）
 	if a.cfg.UDP.Enabled {
@@ -115,7 +129,7 @@ func (a *App) StopTCPServer() {
 
 // initRouter 初始化路由
 // 配置所有 API 路由和中间件
-func (a *App) initRouter(tagCache *tagcache.Cache, unmatchedQueue *unmatchedqueue.Queue) {
+func (a *App) initRouter(tagCache *tagcache.Cache, ruleCache *rulecache.Cache, unmatchedQueue *unmatchedqueue.Queue) {
 	// 创建 Gin 路由引擎
 	if a.cfg.Server.Host == "0.0.0.0" && a.cfg.Server.Port == 8888 {
 		gin.SetMode(gin.ReleaseMode)
@@ -136,7 +150,7 @@ func (a *App) initRouter(tagCache *tagcache.Cache, unmatchedQueue *unmatchedqueu
 
 	// 创建处理器实例（共享 billing 缓存，tag 归属变更时立即失效以实时生效）
 	billingConfigCache := handler.NewBillingConfigCache(60 * time.Second)
-	a.logHandler = handler.NewLogHandler(tagCache, unmatchedQueue, billingConfigCache)
+	a.logHandler = handler.NewLogHandler(tagCache, ruleCache, unmatchedQueue, billingConfigCache)
 	logHandler := a.logHandler
 	metricsHandler := handler.NewMetricsHandler()
 	dashboardHandler := handler.NewDashboardHandler()

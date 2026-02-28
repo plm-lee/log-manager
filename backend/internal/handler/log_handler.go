@@ -14,8 +14,11 @@ import (
 	"time"
 
 	"log-manager/internal/database"
+	"log-manager/internal/fulltext"
 	"log-manager/internal/models"
+	"log-manager/internal/rulecache"
 	"log-manager/internal/tagcache"
+	"log-manager/internal/taglogcount"
 	"log-manager/internal/unmatchedqueue"
 
 	"github.com/gin-gonic/gin"
@@ -125,12 +128,13 @@ type LogHandler struct {
 	db            *gorm.DB
 	bccache       *BillingConfigCache
 	tagCache      *tagcache.Cache
+	ruleCache     *rulecache.Cache
 	unmatchedQueue *unmatchedqueue.Queue
 }
 
 // NewLogHandler 创建日志处理器实例
-// tagCache 可为 nil；unmatchedQueue 可为 nil；bcCache 可为 nil，为 nil 时内部新建（TTL 60s）
-func NewLogHandler(tagCache *tagcache.Cache, unmatchedQueue *unmatchedqueue.Queue, bcCache *BillingConfigCache) *LogHandler {
+// tagCache、ruleCache 可为 nil；unmatchedQueue 可为 nil；bcCache 可为 nil，为 nil 时内部新建（TTL 60s）
+func NewLogHandler(tagCache *tagcache.Cache, ruleCache *rulecache.Cache, unmatchedQueue *unmatchedqueue.Queue, bcCache *BillingConfigCache) *LogHandler {
 	if bcCache == nil {
 		bcCache = &BillingConfigCache{ttl: 60 * time.Second}
 	}
@@ -138,6 +142,7 @@ func NewLogHandler(tagCache *tagcache.Cache, unmatchedQueue *unmatchedqueue.Queu
 		db:             database.DB,
 		bccache:        bcCache,
 		tagCache:       tagCache,
+		ruleCache:      ruleCache,
 		unmatchedQueue: unmatchedQueue,
 	}
 }
@@ -303,6 +308,9 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 				_ = h.tagCache.EnsureTag(t)
 			}
 		}
+		if h.ruleCache != nil && logReq.RuleName != "" {
+			_ = h.ruleCache.EnsureRuleName(logReq.RuleName)
+		}
 		tag := strings.TrimSpace(logReq.Tag)
 		if !isBillingTag(logReq.Tag, idx) {
 			logEntries = append(logEntries, models.LogEntry{
@@ -383,6 +391,15 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 			successCount += len(logEntries)
 			for i := range logEntries {
 				ids = append(ids, logEntries[i].ID)
+			}
+			deltas := make(map[string]int64)
+			for _, e := range logEntries {
+				for _, t := range parseLogTags(e.Tag) {
+					deltas[t]++
+				}
+			}
+			if err := taglogcount.IncrByTagDeltas(tx, deltas); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -535,9 +552,7 @@ func (h *LogHandler) QueryLogs(c *gin.Context) {
 	if req.RuleName != "" {
 		query = query.Where("rule_name = ?", req.RuleName)
 	}
-	if req.Keyword != "" {
-		query = query.Where("log_line LIKE ?", "%"+req.Keyword+"%")
-	}
+	query = fulltext.ApplyLogLineKeyword(query, req.Keyword)
 	if req.StartTime > 0 {
 		query = query.Where("timestamp >= ?", req.StartTime)
 	}
@@ -579,13 +594,12 @@ func (h *LogHandler) QueryLogs(c *gin.Context) {
 }
 
 // GetTags 获取所有标签列表
-// 返回数据库中所有不同的标签
+// 从 tags 表读取（写入时维护），避免 log_entries 全表 Distinct 慢查询
 func (h *LogHandler) GetTags(c *gin.Context) {
 	var tags []string
-	if err := h.db.Model(&models.LogEntry{}).
-		Distinct("tag").
-		Where("tag != ?", "").
-		Pluck("tag", &tags).Error; err != nil {
+	if err := h.db.Model(&models.Tag{}).
+		Where("name != ? AND name IS NOT NULL", "").
+		Pluck("name", &tags).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "查询标签失败",
 			"message": err.Error(),
@@ -605,28 +619,32 @@ type TagStats struct {
 }
 
 // GetTagStats 获取标签及日志数量统计（用于分类管理）
+// 从 tag_log_counts 读取（写入时更新），避免 log_entries 全表 Group 慢查询
 func (h *LogHandler) GetTagStats(c *gin.Context) {
 	var stats []TagStats
-	h.db.Model(&models.LogEntry{}).
-		Select("tag as tag, count(*) as count").
+	if err := h.db.Model(&models.TagLogCount{}).
+		Select("tag as tag, count as count").
 		Where("tag != ? AND tag IS NOT NULL", "").
-		Group("tag").
 		Order("count DESC").
-		Scan(&stats)
-
+		Scan(&stats).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "查询标签统计失败",
+			"message": err.Error(),
+		})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"tags": stats,
 	})
 }
 
 // GetRuleNames 获取所有规则名称列表
-// 返回数据库中所有不同的规则名称
+// 从 rule_names 表读取（写入时维护），避免 log_entries 全表 Distinct 慢查询
 func (h *LogHandler) GetRuleNames(c *gin.Context) {
 	var ruleNames []string
-	if err := h.db.Model(&models.LogEntry{}).
-		Distinct("rule_name").
-		Where("rule_name != ?", "").
-		Pluck("rule_name", &ruleNames).Error; err != nil {
+	if err := h.db.Model(&models.RuleName{}).
+		Where("name != ? AND name IS NOT NULL", "").
+		Pluck("name", &ruleNames).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "查询规则名称失败",
 			"message": err.Error(),
@@ -741,7 +759,7 @@ func (h *LogHandler) UploadLog(c *gin.Context) {
 		}
 		batch := entries[i:end]
 		if err := h.db.CreateInBatches(&batch, 50).Error; err != nil {
-			// 逐条重试
+			// 逐条重试（此分支不更新 tag_log_counts，避免统计偏差）
 			for _, e := range batch {
 				if h.db.Create(&e).Error == nil {
 					successCount++
@@ -749,6 +767,13 @@ func (h *LogHandler) UploadLog(c *gin.Context) {
 			}
 		} else {
 			successCount += len(batch)
+			deltas := make(map[string]int64)
+			for _, e := range batch {
+				for _, t := range parseLogTags(e.Tag) {
+					deltas[t]++
+				}
+			}
+			_ = taglogcount.IncrByTagDeltas(h.db, deltas)
 		}
 	}
 
@@ -801,9 +826,7 @@ func (h *LogHandler) ExportLogs(c *gin.Context) {
 	if req.RuleName != "" {
 		query = query.Where("rule_name = ?", req.RuleName)
 	}
-	if req.Keyword != "" {
-		query = query.Where("log_line LIKE ?", "%"+req.Keyword+"%")
-	}
+	query = fulltext.ApplyLogLineKeyword(query, req.Keyword)
 	if req.StartTime > 0 {
 		query = query.Where("timestamp >= ?", req.StartTime)
 	}

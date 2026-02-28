@@ -56,27 +56,23 @@ func parseTagNames(s string) []string {
 }
 
 // GetManagedTags 获取 tag 列表（含项目信息、日志数）
-// log_entries.tag 可能为逗号分隔（如 tag1,tag2），会拆分为独立 tag 分别统计
+// 从 tag_log_counts 读取（写入时更新），避免 log_entries 全表 Group 慢查询
 func (h *TagHandler) GetManagedTags(c *gin.Context) {
 	var stats []struct {
 		Tag   string
 		Count int64
 	}
-	if err := h.db.Model(&models.LogEntry{}).
-		Select("tag as tag, count(*) as count").
+	if err := h.db.Model(&models.TagLogCount{}).
+		Select("tag as tag, count as count").
 		Where("tag != '' AND tag IS NOT NULL").
-		Group("tag").
 		Order("count DESC").
 		Scan(&stats).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// 按逗号拆分后聚合：每个独立 tag 的 count 累加
 	agg := make(map[string]int64)
 	for _, s := range stats {
-		for _, name := range parseTagNames(s.Tag) {
-			agg[name] += s.Count
-		}
+		agg[s.Tag] = s.Count
 	}
 	var tags []models.Tag
 	if err := h.db.Preload("Project").Find(&tags).Error; err != nil {
