@@ -527,9 +527,10 @@ func (h *LogHandler) QueryLogs(c *gin.Context) {
 	// 构建查询
 	query := h.db.Model(&models.LogEntry{})
 
-	// 应用筛选条件
+	// 应用筛选条件（tag 支持逗号分隔，按单个 tag 匹配包含该 tag 的日志）
 	if req.Tag != "" {
-		query = query.Where("tag = ?", req.Tag)
+		t := req.Tag
+		query = query.Where("tag = ? OR tag LIKE ? OR tag LIKE ? OR tag LIKE ?", t, t+",%", "%,"+t, "%,"+t+",%")
 	}
 	if req.RuleName != "" {
 		query = query.Where("rule_name = ?", req.RuleName)
@@ -794,7 +795,8 @@ func (h *LogHandler) ExportLogs(c *gin.Context) {
 
 	query := h.db.Model(&models.LogEntry{})
 	if req.Tag != "" {
-		query = query.Where("tag = ?", req.Tag)
+		t := req.Tag
+		query = query.Where("tag = ? OR tag LIKE ? OR tag LIKE ? OR tag LIKE ?", t, t+",%", "%,"+t, "%,"+t+",%")
 	}
 	if req.RuleName != "" {
 		query = query.Where("rule_name = ?", req.RuleName)

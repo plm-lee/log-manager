@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"sort"
 	"strings"
 
 	"log-manager/internal/database"
@@ -38,7 +39,24 @@ type ManagedTag struct {
 	ProjectType string  `json:"project_type"`
 }
 
+// parseTagNames 解析逗号分隔的 tag 字符串为 tag 列表（与 log_handler.parseLogTags 逻辑一致）
+func parseTagNames(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		t := strings.TrimSpace(p)
+		if t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // GetManagedTags 获取 tag 列表（含项目信息、日志数）
+// log_entries.tag 可能为逗号分隔（如 tag1,tag2），会拆分为独立 tag 分别统计
 func (h *TagHandler) GetManagedTags(c *gin.Context) {
 	var stats []struct {
 		Tag   string
@@ -53,6 +71,13 @@ func (h *TagHandler) GetManagedTags(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	// 按逗号拆分后聚合：每个独立 tag 的 count 累加
+	agg := make(map[string]int64)
+	for _, s := range stats {
+		for _, name := range parseTagNames(s.Tag) {
+			agg[name] += s.Count
+		}
+	}
 	var tags []models.Tag
 	if err := h.db.Preload("Project").Find(&tags).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -63,18 +88,28 @@ func (h *TagHandler) GetManagedTags(c *gin.Context) {
 		tagByKey[tags[i].Name] = &tags[i]
 	}
 	// 确保所有在 log_entries 中出现的 tag 都有记录（可能尚未在 tags 表中）
-	for _, s := range stats {
-		if tagByKey[s.Tag] == nil {
-			t := models.Tag{Name: s.Tag}
-			_ = h.db.Where("name = ?", s.Tag).FirstOrCreate(&t).Error
+	for name := range agg {
+		if tagByKey[name] == nil {
+			t := models.Tag{Name: name}
+			_ = h.db.Where("name = ?", name).FirstOrCreate(&t).Error
 			_ = h.db.Preload("Project").First(&t, t.ID).Error
-			tagByKey[s.Tag] = &t
+			tagByKey[name] = &t
 		}
 	}
-	result := make([]ManagedTag, 0, len(stats))
-	for _, s := range stats {
-		t := tagByKey[s.Tag]
-		mt := ManagedTag{Tag: s.Tag, Count: s.Count}
+	// 按 count 降序构建结果
+	type pair struct {
+		name  string
+		count int64
+	}
+	pairs := make([]pair, 0, len(agg))
+	for name, count := range agg {
+		pairs = append(pairs, pair{name: name, count: count})
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].count > pairs[j].count })
+	result := make([]ManagedTag, 0, len(pairs))
+	for _, p := range pairs {
+		t := tagByKey[p.name]
+		mt := ManagedTag{Tag: p.name, Count: p.count}
 		if t != nil {
 			mt.ProjectID = t.ProjectID
 			if t.Project != nil {
