@@ -75,11 +75,13 @@ const BillingConfig = () => {
     setEditingId(record.id);
     form.setFieldsValue({
       bill_key: record.bill_key,
+      billing_tag: record.billing_tag || '',
       match_type: record.match_type,
       match_value: record.match_value,
       unit_price: record.unit_price,
       description: record.description || '',
     });
+    loadBillingProjectTags();
     setModalVisible(true);
   };
 
@@ -96,7 +98,7 @@ const BillingConfig = () => {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
-      const { billing_tag, ...payload } = values;
+      const payload = { ...values };
       if (editingId) {
         await billingApi.updateConfig(editingId, payload);
         message.success('更新成功');
@@ -135,6 +137,13 @@ const BillingConfig = () => {
       title: '匹配值',
       dataIndex: 'match_value',
       key: 'match_value',
+    },
+    {
+      title: '计费 Tag',
+      dataIndex: 'billing_tag',
+      key: 'billing_tag',
+      width: 140,
+      ellipsis: true,
     },
     {
       title: '单价',
@@ -207,25 +216,23 @@ const BillingConfig = () => {
         cancelText="取消"
       >
         <Form form={form} layout="vertical">
-          {!editingId && (
-            <Form.Item
-              name="billing_tag"
-              label="计费 Tag（必选）"
-              extra="请先从已标记为计费项目的标签中选择一个。若列表为空，请先在「分类管理」中将标签设置到计费项目。"
-              rules={[{ required: true, message: '请选择计费 Tag' }]}
-            >
-              <Select
-                placeholder="选择计费项目下的 Tag"
-                allowClear
-                options={billingProjectTags.map((t) => ({ label: t, value: t }))}
-                onChange={(v) => {
-                  if (v) {
-                    form.setFieldsValue({ match_type: 'tag', match_value: v });
-                  }
-                }}
-              />
-            </Form.Item>
-          )}
+          <Form.Item
+            name="billing_tag"
+            label="计费 Tag（必选）"
+            extra="请先从已标记为计费项目的标签中选择一个。该规则仅对选中的 tag 生效。若列表为空，请先在「分类管理」中将标签设置到计费项目。"
+            rules={[{ required: true, message: '请选择计费 Tag' }]}
+          >
+            <Select
+              placeholder="选择计费项目下的 Tag"
+              allowClear
+              options={billingProjectTags.map((t) => ({ label: t, value: t }))}
+              onChange={(v) => {
+                if (v) {
+                  form.setFieldsValue({ match_type: 'tag', match_value: v });
+                }
+              }}
+            />
+          </Form.Item>
           <Form.Item
             name="bill_key"
             label="计费类型标识 (bill_key)"

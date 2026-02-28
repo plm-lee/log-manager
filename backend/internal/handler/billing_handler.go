@@ -53,6 +53,7 @@ func (h *BillingHandler) GetConfigs(c *gin.Context) {
 // CreateConfigRequest 新增计费配置请求
 type CreateConfigRequest struct {
 	BillKey     string  `json:"bill_key" binding:"required"`
+	BillingTag  string  `json:"billing_tag" binding:"required"` // 必选，该规则生效的 tag（从计费项目中选择）
 	MatchType   string  `json:"match_type" binding:"required,oneof=tag rule_name log_line_contains"`
 	MatchValue  string  `json:"match_value" binding:"required"`
 	UnitPrice   float64 `json:"unit_price" binding:"gte=0"` // 允许 0（免费）
@@ -71,6 +72,7 @@ func (h *BillingHandler) CreateConfig(c *gin.Context) {
 	}
 	config := models.BillingConfig{
 		BillKey:     req.BillKey,
+		BillingTag:  strings.TrimSpace(req.BillingTag),
 		MatchType:   req.MatchType,
 		MatchValue:  req.MatchValue,
 		UnitPrice:   req.UnitPrice,
@@ -89,6 +91,7 @@ func (h *BillingHandler) CreateConfig(c *gin.Context) {
 // UpdateConfigRequest 更新计费配置请求
 type UpdateConfigRequest struct {
 	BillKey     string  `json:"bill_key" binding:"required"`
+	BillingTag  string  `json:"billing_tag" binding:"required"` // 必选，该规则生效的 tag
 	MatchType   string  `json:"match_type" binding:"required,oneof=tag rule_name log_line_contains"`
 	MatchValue  string  `json:"match_value" binding:"required"`
 	UnitPrice   float64 `json:"unit_price" binding:"gte=0"`
@@ -116,6 +119,7 @@ func (h *BillingHandler) UpdateConfig(c *gin.Context) {
 		return
 	}
 	config.BillKey = req.BillKey
+	config.BillingTag = strings.TrimSpace(req.BillingTag)
 	config.MatchType = req.MatchType
 	config.MatchValue = req.MatchValue
 	config.UnitPrice = req.UnitPrice

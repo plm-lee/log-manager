@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"log-manager/internal/config"
@@ -87,6 +88,35 @@ func Init(cfg *config.DatabaseConfig) error {
 		return fmt.Errorf("初始化计费项目失败: %w", err)
 	}
 
+	// 迁移：为 billing_configs 中 billing_tag 为空的旧数据回填
+	if err := migrateBillingConfigBillingTag(); err != nil {
+		return fmt.Errorf("迁移 billing_tag 失败: %w", err)
+	}
+
+	return nil
+}
+
+// migrateBillingConfigBillingTag 为旧计费配置回填 billing_tag
+// match_type=tag 时用 match_value；否则用 tag_scope 首个值
+func migrateBillingConfigBillingTag() error {
+	var configs []models.BillingConfig
+	if err := DB.Where("billing_tag = '' OR billing_tag IS NULL").Find(&configs).Error; err != nil {
+		return err
+	}
+	for _, cfg := range configs {
+		var billingTag string
+		if cfg.MatchType == "tag" {
+			billingTag = strings.TrimSpace(cfg.MatchValue)
+		} else if cfg.TagScope != "" {
+			parts := strings.SplitN(strings.TrimSpace(cfg.TagScope), ",", 2)
+			billingTag = strings.TrimSpace(parts[0])
+		}
+		if billingTag != "" {
+			if err := DB.Model(&models.BillingConfig{}).Where("id = ?", cfg.ID).Update("billing_tag", billingTag).Error; err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

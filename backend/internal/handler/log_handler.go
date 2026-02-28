@@ -140,21 +140,31 @@ func isBillingTag(tag string, idx *indexedBillingConfig) bool {
 }
 
 // matchBillingConfigs 检查日志是否匹配计费配置，返回匹配的配置列表
-// 采用分层匹配顺序：tag -> rule_name -> log_line_contains
+// 匹配逻辑：先判断 log.tag == cfg.BillingTag，再根据 match_type/match_value 匹配
 // 注意：仅对归属计费项目的 tag 调用此函数
 func matchBillingConfigs(req ReceiveLogRequest, idx *indexedBillingConfig) []models.BillingConfig {
+	tag := strings.TrimSpace(req.Tag)
 	var matched []models.BillingConfig
 	for _, cfg := range idx.byTag {
-		if cfg.MatchValue == req.Tag || strings.Contains(req.Tag, cfg.MatchValue) {
+		if tag != strings.TrimSpace(cfg.BillingTag) {
+			continue
+		}
+		if cfg.MatchValue == tag || strings.Contains(tag, cfg.MatchValue) {
 			matched = append(matched, cfg)
 		}
 	}
 	for _, cfg := range idx.byRuleName {
+		if tag != strings.TrimSpace(cfg.BillingTag) {
+			continue
+		}
 		if strings.Contains(req.RuleName, cfg.MatchValue) {
 			matched = append(matched, cfg)
 		}
 	}
 	for _, cfg := range idx.byLogLineContains {
+		if tag != strings.TrimSpace(cfg.BillingTag) {
+			continue
+		}
 		if strings.Contains(req.LogLine, cfg.MatchValue) {
 			matched = append(matched, cfg)
 		}

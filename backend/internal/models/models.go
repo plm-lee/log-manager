@@ -53,12 +53,13 @@ func (MetricsEntry) TableName() string {
 // 定义计费类型与单价，用于按日志匹配统计计费
 type BillingConfig struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
-	BillKey     string    `gorm:"size:100;not null;index" json:"bill_key"`     // 计费类型标识
-	MatchType   string    `gorm:"size:32;not null" json:"match_type"`          // tag / rule_name / log_line_contains
-	MatchValue  string    `gorm:"size:255;not null" json:"match_value"`        // 匹配值
-	TagScope    string    `gorm:"size:500;default:''" json:"tag_scope"`        // 可选，逗号分隔的 tag 列表；为空表示对所有 tag 生效
+	BillKey     string    `gorm:"size:100;not null;index" json:"bill_key"`      // 计费类型标识
+	BillingTag  string    `gorm:"size:100;not null;default:'';index" json:"billing_tag"` // 新增时必选，该规则生效的 tag
+	MatchType   string    `gorm:"size:32;not null" json:"match_type"`           // tag / rule_name / log_line_contains
+	MatchValue  string    `gorm:"size:255;not null" json:"match_value"`         // 匹配值
+	TagScope    string    `gorm:"size:500;default:''" json:"tag_scope"`         // 已废弃，保留兼容；匹配时用 billing_tag
 	UnitPrice   float64   `gorm:"type:decimal(12,4);not null" json:"unit_price"` // 单价
-	Description string    `gorm:"type:text" json:"description"`                // 备注
+	Description string    `gorm:"type:text" json:"description"`                 // 备注
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
