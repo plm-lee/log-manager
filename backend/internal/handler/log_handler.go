@@ -143,16 +143,18 @@ func NewLogHandler(tagCache *tagcache.Cache, unmatchedQueue *unmatchedqueue.Queu
 }
 
 // isBillingTag 判断 tag 是否归属计费项目（仅计费项目 tag 才参与计费规则匹配）
-func isBillingTag(tag string, idx *indexedBillingConfig) bool {
-	if tag == "" {
+// 支持逗号分隔多 tag：任一 tag 在 billingTagSet 中即返回 true
+func isBillingTag(tagStr string, idx *indexedBillingConfig) bool {
+	tags := parseLogTags(tagStr)
+	if len(tags) == 0 || idx.billingTagSet == nil {
 		return false
 	}
-	tag = strings.TrimSpace(tag)
-	if idx.billingTagSet == nil {
-		return false
+	for _, t := range tags {
+		if _, ok := idx.billingTagSet[t]; ok {
+			return true
+		}
 	}
-	_, ok := idx.billingTagSet[tag]
-	return ok
+	return false
 }
 
 // billingTagContains 判断 cfg.BillingTag（逗号拼接）是否包含 tag
@@ -169,22 +171,54 @@ func billingTagContains(billingTagStr, tag string) bool {
 	return false
 }
 
+// parseLogTags 解析逗号分隔的 tag 字符串为 tag 列表（log-filter-monitor 可能上报 "tag1,tag2,tag3"）
+func parseLogTags(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		t := strings.TrimSpace(p)
+		if t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// anyLogTagInBillingTag 判断 log 的 tag 列表中是否有任一 tag 在 cfg.BillingTag 内
+func anyLogTagInBillingTag(logTags []string, billingTagStr string) bool {
+	for _, t := range logTags {
+		if billingTagContains(billingTagStr, t) {
+			return true
+		}
+	}
+	return false
+}
+
 // matchBillingConfigs 检查日志是否匹配计费配置，返回匹配的配置列表
-// 匹配逻辑：先判断 log.tag 在 cfg.BillingTag 列表中（支持逗号拼接多 tag），再根据 match_type/match_value 匹配
+// 匹配逻辑：log.tag 支持逗号分隔多 tag，任一 tag 在 cfg.BillingTag 内且满足 match_type 即匹配
 // 注意：仅对归属计费项目的 tag 调用此函数
 func matchBillingConfigs(req ReceiveLogRequest, idx *indexedBillingConfig) []models.BillingConfig {
-	tag := strings.TrimSpace(req.Tag)
+	logTags := parseLogTags(req.Tag)
+	if len(logTags) == 0 {
+		return nil
+	}
 	var matched []models.BillingConfig
 	for _, cfg := range idx.byTag {
-		if !billingTagContains(cfg.BillingTag, tag) {
+		if !anyLogTagInBillingTag(logTags, cfg.BillingTag) {
 			continue
 		}
-		if cfg.MatchValue == tag || strings.Contains(tag, cfg.MatchValue) {
-			matched = append(matched, cfg)
+		for _, t := range logTags {
+			if billingTagContains(cfg.BillingTag, t) && (cfg.MatchValue == t || strings.Contains(t, cfg.MatchValue)) {
+				matched = append(matched, cfg)
+				break
+			}
 		}
 	}
 	for _, cfg := range idx.byRuleName {
-		if !billingTagContains(cfg.BillingTag, tag) {
+		if !anyLogTagInBillingTag(logTags, cfg.BillingTag) {
 			continue
 		}
 		if strings.Contains(req.RuleName, cfg.MatchValue) {
@@ -192,7 +226,7 @@ func matchBillingConfigs(req ReceiveLogRequest, idx *indexedBillingConfig) []mod
 		}
 	}
 	for _, cfg := range idx.byLogLineContains {
-		if !billingTagContains(cfg.BillingTag, tag) {
+		if !anyLogTagInBillingTag(logTags, cfg.BillingTag) {
 			continue
 		}
 		if strings.Contains(req.LogLine, cfg.MatchValue) {
@@ -265,7 +299,9 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 
 	for _, logReq := range logs {
 		if h.tagCache != nil && logReq.Tag != "" {
-			_ = h.tagCache.EnsureTag(logReq.Tag)
+			for _, t := range parseLogTags(logReq.Tag) {
+				_ = h.tagCache.EnsureTag(t)
+			}
 		}
 		tag := strings.TrimSpace(logReq.Tag)
 		if !isBillingTag(logReq.Tag, idx) {
