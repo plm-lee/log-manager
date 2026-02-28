@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -170,7 +171,7 @@ func (h *BillingHandler) DeleteConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 }
 
-// BillingStatItem 计费统计项
+// BillingStatItem 计费统计项（明细）
 type BillingStatItem struct {
 	Date      string  `json:"date"`
 	BillKey   string  `json:"bill_key"`
@@ -180,14 +181,32 @@ type BillingStatItem struct {
 	Amount    float64 `json:"amount"`
 }
 
-// GetStatsResponse 计费统计响应
+// DailyStatItem 按日汇总项
+type DailyStatItem struct {
+	Date        string  `json:"date"`
+	TotalCount  int64   `json:"total_count"`
+	TotalAmount float64 `json:"total_amount"`
+}
+
+// GetStatsResponse 计费统计响应（明细模式）
 type GetStatsResponse struct {
 	Data        []BillingStatItem `json:"data"`
+	Total       int64             `json:"total,omitempty"`
 	TotalAmount float64           `json:"total_amount"`
 }
 
+// GetStatsSummaryResponse 按日汇总响应
+type GetStatsSummaryResponse struct {
+	Data        []DailyStatItem `json:"data"`
+	Total       int64           `json:"total"`
+	TotalAmount float64         `json:"total_amount"`
+}
+
 // GetStats 计费统计
-// 从 billing_entries 读取，参数: start_date, end_date (格式 YYYY-MM-DD)
+// 从 billing_entries 读取
+// 参数: start_date, end_date (格式 YYYY-MM-DD)
+// group_by=day: 按日汇总，返回 DailyStatItem，支持 page/page_size，按日期倒序
+// group_by=detail 或 传 date: 返回指定日期的明细 BillingStatItem，支持 page/page_size
 func (h *BillingHandler) GetStats(c *gin.Context) {
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
@@ -225,13 +244,138 @@ func (h *BillingHandler) GetStats(c *gin.Context) {
 		}
 	}
 
-	var entries []models.BillingEntry
-	q := h.db.Model(&models.BillingEntry{}).
+	targetDate := c.Query("date")
+
+	// 日明细模式：传 date 时返回该日明细
+	if targetDate != "" {
+		if _, err := time.ParseInLocation("2006-01-02", targetDate, time.Local); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "date 格式错误",
+				"message": "应为 YYYY-MM-DD",
+			})
+			return
+		}
+		h.getStatsDetail(c, targetDate, tagFilter)
+		return
+	}
+
+	// 按日汇总模式（默认）
+	h.getStatsSummary(c, startDate, endDate, tagFilter)
+}
+
+func (h *BillingHandler) getStatsSummary(c *gin.Context, startDate, endDate string, tagFilter []string) {
+	page := 1
+	if p := c.Query("page"); p != "" {
+		if v, err := parseIntDefault(p, 1); err == nil && v >= 1 {
+			page = v
+		}
+	}
+	pageSize := 20
+	if ps := c.Query("page_size"); ps != "" {
+		if v, err := parseIntDefault(ps, 20); err == nil && v >= 1 && v <= 100 {
+			pageSize = v
+		}
+	}
+	offset := (page - 1) * pageSize
+
+	baseQ := h.db.Model(&models.BillingEntry{}).
 		Where("date >= ? AND date <= ?", startDate, endDate)
+	if len(tagFilter) > 0 {
+		baseQ = baseQ.Where("tag IN ?", tagFilter)
+	}
+
+	type dailyRow struct {
+		Date        string
+		TotalCount  int64
+		TotalAmount float64
+	}
+
+	var totalDays int64
+	if err := baseQ.Distinct("date").Count(&totalDays).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "统计失败",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	var rows []dailyRow
+	// 按 date DESC 排序，分页
+	subQ := baseQ.Select("date, SUM(count) as total_count, SUM(amount) as total_amount").
+		Group("date").
+		Order("date DESC").
+		Limit(pageSize).
+		Offset(offset)
+	if err := subQ.Scan(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "统计失败",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	// 计算全量 total_amount（汇总金额，使用 Row().Scan 确保正确读取聚合结果）
+	var totalAmount float64
+	sumQ := h.db.Model(&models.BillingEntry{}).
+		Where("date >= ? AND date <= ?", startDate, endDate)
+	if len(tagFilter) > 0 {
+		sumQ = sumQ.Where("tag IN ?", tagFilter)
+	}
+	row := sumQ.Select("COALESCE(SUM(amount), 0)").Row()
+	if err := row.Scan(&totalAmount); err != nil {
+		totalAmount = 0
+	}
+
+	result := make([]DailyStatItem, 0, len(rows))
+	for _, r := range rows {
+		result = append(result, DailyStatItem{
+			Date:        r.Date,
+			TotalCount:  r.TotalCount,
+			TotalAmount: r.TotalAmount,
+		})
+	}
+
+	c.JSON(http.StatusOK, GetStatsSummaryResponse{
+		Data:        result,
+		Total:       totalDays,
+		TotalAmount: totalAmount,
+	})
+}
+
+func (h *BillingHandler) getStatsDetail(c *gin.Context, date string, tagFilter []string) {
+	page := 1
+	if p := c.Query("page"); p != "" {
+		if v, err := parseIntDefault(p, 1); err == nil && v >= 1 {
+			page = v
+		}
+	}
+	pageSize := 20
+	if ps := c.Query("page_size"); ps != "" {
+		if v, err := parseIntDefault(ps, 20); err == nil && v >= 1 && v <= 100 {
+			pageSize = v
+		}
+	}
+	offset := (page - 1) * pageSize
+
+	q := h.db.Model(&models.BillingEntry{}).Where("date = ?", date)
 	if len(tagFilter) > 0 {
 		q = q.Where("tag IN ?", tagFilter)
 	}
-	if err := q.Order("date ASC, bill_key ASC").Find(&entries).Error; err != nil {
+
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "统计失败",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	var entries []models.BillingEntry
+	if err := q.Order("bill_key ASC, tag ASC").
+		Limit(pageSize).
+		Offset(offset).
+		Find(&entries).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "统计失败",
 			"message": err.Error(),
@@ -257,8 +401,26 @@ func (h *BillingHandler) GetStats(c *gin.Context) {
 		totalAmount += e.Amount
 	}
 
+	// 详情页的总金额应为该日全量（含 tag 筛选）
+	var sumRes struct{ S float64 `gorm:"column:s"` }
+	sumQ := h.db.Model(&models.BillingEntry{}).Where("date = ?", date)
+	if len(tagFilter) > 0 {
+		sumQ = sumQ.Where("tag IN ?", tagFilter)
+	}
+	sumQ.Select("COALESCE(SUM(amount), 0) as s").Scan(&sumRes)
+	dayTotal := sumRes.S
+
 	c.JSON(http.StatusOK, GetStatsResponse{
 		Data:        result,
-		TotalAmount: totalAmount,
+		Total:       total,
+		TotalAmount: dayTotal,
 	})
+}
+
+func parseIntDefault(s string, defaultVal int) (int, error) {
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return defaultVal, err
+	}
+	return v, nil
 }

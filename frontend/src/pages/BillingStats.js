@@ -10,9 +10,10 @@ import {
   Statistic,
   Select,
   Collapse,
+  Modal,
 } from 'antd';
 import { useNavigate } from 'react-router-dom';
-import { SearchOutlined, SettingOutlined, WarningOutlined } from '@ant-design/icons';
+import { SearchOutlined, SettingOutlined, WarningOutlined, EyeOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { billingApi } from '../api';
 
@@ -21,13 +22,16 @@ const { Title, Text } = Typography;
 
 /**
  * 计费统计页面
- * 按日期范围统计计费金额，展示日期、计费类型、数量、单价、金额
+ * 主列表：按日汇总（日期、总数量、当天金额），分页每页20条，按日期倒序
+ * 详情：点击某日「详情」弹窗展示该日计费明细
  */
 const BillingStats = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState([]);
   const [totalAmount, setTotalAmount] = useState(0);
+  const [totalDays, setTotalDays] = useState(0);
+  const [page, setPage] = useState(1);
   const [dateRange, setDateRange] = useState([
     dayjs().subtract(7, 'day'),
     dayjs(),
@@ -36,6 +40,13 @@ const BillingStats = () => {
   const [tagOptions, setTagOptions] = useState([]);
   const [unmatched, setUnmatched] = useState([]);
   const [unmatchedLoading, setUnmatchedLoading] = useState(false);
+  const [detailVisible, setDetailVisible] = useState(false);
+  const [detailDate, setDetailDate] = useState('');
+  const [detailData, setDetailData] = useState([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailTotal, setDetailTotal] = useState(0);
+  const [detailTotalAmount, setDetailTotalAmount] = useState(0);
+  const [detailPage, setDetailPage] = useState(1);
 
   const loadTags = async () => {
     try {
@@ -46,25 +57,59 @@ const BillingStats = () => {
     }
   };
 
-  const loadStats = async () => {
+  const loadStats = async (p = 1) => {
     if (!dateRange || dateRange.length !== 2) {
       message.warning('请选择日期范围');
       return;
     }
     setLoading(true);
     try {
-      const res = await billingApi.getStats({
+      const res = await billingApi.getStatsSummary({
         start_date: dateRange[0].format('YYYY-MM-DD'),
         end_date: dateRange[1].format('YYYY-MM-DD'),
         tags: selectedTags.length ? selectedTags : undefined,
+        page: p,
+        page_size: 20,
       });
       setData(res.data.data || []);
       setTotalAmount(res.data.total_amount || 0);
+      setTotalDays(res.data.total || 0);
     } catch (err) {
       message.error('加载计费统计失败: ' + (err.response?.data?.message || err.message));
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadDetail = async (dateStr, p = 1) => {
+    setDetailLoading(true);
+    try {
+      const res = await billingApi.getStatsDetail({
+        date: dateStr,
+        tags: selectedTags.length ? selectedTags : undefined,
+        page: p,
+        page_size: 20,
+      });
+      setDetailData(res.data.data || []);
+      setDetailTotal(res.data.total || 0);
+      setDetailTotalAmount(res.data.total_amount || 0);
+    } catch (err) {
+      message.error('加载明细失败: ' + (err.response?.data?.message || err.message));
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const showDetail = (dateStr) => {
+    setDetailDate(dateStr);
+    setDetailVisible(true);
+    setDetailPage(1);
+    loadDetail(dateStr, 1);
+  };
+
+  const handleDetailPageChange = (p) => {
+    setDetailPage(p);
+    loadDetail(detailDate, p);
   };
 
   const loadUnmatched = async () => {
@@ -86,49 +131,65 @@ const BillingStats = () => {
   }, []);
 
   useEffect(() => {
-    loadStats();
+    loadStats(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleSearch = () => {
+    setPage(1);
+    loadStats(1);
+  };
 
   const columns = [
     {
       title: '日期',
       dataIndex: 'date',
       key: 'date',
-      width: 120,
+      width: 160,
       render: (date) => (date ? dayjs(date).format('YYYY年MM月DD日') : '-'),
     },
     {
-      title: '计费类型',
-      dataIndex: 'bill_key',
-      key: 'bill_key',
-    },
-    {
-      title: '标签',
-      dataIndex: 'tag',
-      key: 'tag',
+      title: '总数量',
+      dataIndex: 'total_count',
+      key: 'total_count',
       width: 120,
-      render: (v) => (v || '-'),
     },
     {
-      title: '数量',
-      dataIndex: 'count',
-      key: 'count',
-      width: 100,
+      title: '当天金额（元）',
+      dataIndex: 'total_amount',
+      key: 'total_amount',
+      width: 140,
+      render: (v) => (v != null ? Number(v).toFixed(3) : '-'),
     },
+    {
+      title: '操作',
+      key: 'action',
+      width: 100,
+      render: (_, record) => (
+        <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => showDetail(record.date)}>
+          详情
+        </Button>
+      ),
+    },
+  ];
+
+  const detailColumns = [
+    { title: '计费类型', dataIndex: 'bill_key', key: 'bill_key', width: 120 },
+    { title: '标签', dataIndex: 'tag', key: 'tag', width: 120, render: (v) => (v || '-') },
+    { title: '数量', dataIndex: 'count', key: 'count', width: 100 },
     {
       title: '单价',
       dataIndex: 'unit_price',
       key: 'unit_price',
       width: 100,
-      render: (v) => (v != null ? v.toFixed(4) : '-'),
+      render: (v) => (v != null ? Number(v).toFixed(4) : '-'),
     },
     {
       title: '金额（元）',
       dataIndex: 'amount',
       key: 'amount',
       width: 120,
-      render: (v) => (v != null ? v.toFixed(3) : '-'),
+      render: (v) => (v != null ? Number(v).toFixed(3) : '-'),
     },
   ];
 
@@ -156,7 +217,7 @@ const BillingStats = () => {
           <Button
             type="primary"
             icon={<SearchOutlined />}
-            onClick={loadStats}
+            onClick={handleSearch}
             loading={loading}
           >
             查询
@@ -184,9 +245,19 @@ const BillingStats = () => {
         <Table
           columns={columns}
           dataSource={data}
-          rowKey={(r) => `${r.date}-${r.bill_key}-${r.tag || ''}`}
+          rowKey="date"
           loading={loading}
-          pagination={false}
+          pagination={{
+            current: page,
+            pageSize: 20,
+            total: totalDays,
+            showSizeChanger: false,
+            showTotal: (t) => `共 ${t} 天`,
+            onChange: (p) => {
+              setPage(p);
+              loadStats(p);
+            },
+          }}
         />
         {data.length === 0 && !loading && (
           <Text type="secondary" style={{ display: 'block', textAlign: 'center', padding: 24 }}>
@@ -239,6 +310,38 @@ const BillingStats = () => {
           },
         ]}
       />
+
+      <Modal
+        title={`${detailDate ? dayjs(detailDate).format('YYYY年MM月DD日') : ''} 计费明细`}
+        open={detailVisible}
+        onCancel={() => setDetailVisible(false)}
+        footer={null}
+        width={700}
+      >
+        <div style={{ marginBottom: 12 }}>
+          <Text strong>当日汇总金额（元）：</Text>{' '}
+          <Text style={{ color: 'var(--lm-accent-amber)' }}>{Number(detailTotalAmount).toFixed(3)}</Text>
+        </div>
+        <Table
+          size="small"
+          columns={detailColumns}
+          dataSource={detailData}
+          rowKey={(r) => `${r.date}-${r.bill_key}-${r.tag || ''}`}
+          loading={detailLoading}
+          pagination={
+            detailTotal <= 20
+              ? false
+              : {
+                  current: detailPage,
+                  pageSize: 20,
+                  total: detailTotal,
+                  showSizeChanger: false,
+                  showTotal: (t) => `共 ${t} 条`,
+                  onChange: handleDetailPageChange,
+                }
+          }
+        />
+      </Modal>
     </div>
   );
 };

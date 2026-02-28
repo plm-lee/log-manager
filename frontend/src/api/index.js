@@ -216,6 +216,24 @@ const billingApi = {
     }
     return api.get(url);
   },
+  /** 计费按日汇总（主列表，分页） */
+  getStatsSummary: (params) => {
+    const { start_date, end_date, tags, page = 1, page_size = 20 } = params;
+    let url = `/billing/stats?start_date=${encodeURIComponent(start_date)}&end_date=${encodeURIComponent(end_date)}&page=${page}&page_size=${page_size}`;
+    if (tags && tags.length) {
+      tags.forEach((t) => { url += `&tags=${encodeURIComponent(t)}`; });
+    }
+    return api.get(url);
+  },
+  /** 计费日明细（详情弹窗，分页） */
+  getStatsDetail: (params) => {
+    const { date, tags, page = 1, page_size = 20 } = params;
+    let url = `/billing/stats?start_date=${date}&end_date=${date}&date=${encodeURIComponent(date)}&page=${page}&page_size=${page_size}`;
+    if (tags && tags.length) {
+      tags.forEach((t) => { url += `&tags=${encodeURIComponent(t)}`; });
+    }
+    return api.get(url);
+  },
 };
 
 export { logApi, metricsApi, dashboardApi, authApi, billingApi, tagProjectApi };
