@@ -53,12 +53,29 @@ func (h *BillingHandler) GetConfigs(c *gin.Context) {
 
 // CreateConfigRequest 新增计费配置请求
 type CreateConfigRequest struct {
-	BillKey     string  `json:"bill_key" binding:"required"`
-	BillingTag  string  `json:"billing_tag" binding:"required"` // 必选，该规则生效的 tag（从计费项目中选择）
-	MatchType   string  `json:"match_type" binding:"required,oneof=tag rule_name log_line_contains"`
-	MatchValue  string  `json:"match_value" binding:"required"`
-	UnitPrice   float64 `json:"unit_price" binding:"gte=0"` // 允许 0（免费）
-	Description string  `json:"description"`
+	BillKey     string   `json:"bill_key" binding:"required"`
+	BillingTag  string   `json:"billing_tag"`  // 兼容旧格式：单个 tag
+	BillingTags []string `json:"billing_tags"` // 多选时传入数组，优先使用
+	MatchType   string   `json:"match_type" binding:"required,oneof=tag rule_name log_line_contains"`
+	MatchValue  string   `json:"match_value" binding:"required"`
+	UnitPrice   float64  `json:"unit_price" binding:"gte=0"` // 允许 0（免费）
+	Description string   `json:"description"`
+}
+
+func resolveBillingTag(tags []string, single string) string {
+	if len(tags) > 0 {
+		trimmed := make([]string, 0, len(tags))
+		for _, t := range tags {
+			s := strings.TrimSpace(t)
+			if s != "" {
+				trimmed = append(trimmed, s)
+			}
+		}
+		if len(trimmed) > 0 {
+			return strings.Join(trimmed, ",")
+		}
+	}
+	return strings.TrimSpace(single)
 }
 
 // CreateConfig 新增计费配置
@@ -71,9 +88,17 @@ func (h *BillingHandler) CreateConfig(c *gin.Context) {
 		})
 		return
 	}
+	billingTag := resolveBillingTag(req.BillingTags, req.BillingTag)
+	if billingTag == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "请求参数错误",
+			"message": "请选择至少一个计费 Tag",
+		})
+		return
+	}
 	config := models.BillingConfig{
 		BillKey:     req.BillKey,
-		BillingTag:  strings.TrimSpace(req.BillingTag),
+		BillingTag:  billingTag,
 		MatchType:   req.MatchType,
 		MatchValue:  req.MatchValue,
 		UnitPrice:   req.UnitPrice,
@@ -91,12 +116,13 @@ func (h *BillingHandler) CreateConfig(c *gin.Context) {
 
 // UpdateConfigRequest 更新计费配置请求
 type UpdateConfigRequest struct {
-	BillKey     string  `json:"bill_key" binding:"required"`
-	BillingTag  string  `json:"billing_tag" binding:"required"` // 必选，该规则生效的 tag
-	MatchType   string  `json:"match_type" binding:"required,oneof=tag rule_name log_line_contains"`
-	MatchValue  string  `json:"match_value" binding:"required"`
-	UnitPrice   float64 `json:"unit_price" binding:"gte=0"`
-	Description string  `json:"description"`
+	BillKey     string   `json:"bill_key" binding:"required"`
+	BillingTag  string   `json:"billing_tag"`
+	BillingTags []string `json:"billing_tags"`
+	MatchType   string   `json:"match_type" binding:"required,oneof=tag rule_name log_line_contains"`
+	MatchValue  string   `json:"match_value" binding:"required"`
+	UnitPrice   float64  `json:"unit_price" binding:"gte=0"`
+	Description string   `json:"description"`
 }
 
 // UpdateConfig 更新计费配置
@@ -114,13 +140,21 @@ func (h *BillingHandler) UpdateConfig(c *gin.Context) {
 		})
 		return
 	}
+	billingTag := resolveBillingTag(req.BillingTags, req.BillingTag)
+	if billingTag == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "请求参数错误",
+			"message": "请选择至少一个计费 Tag",
+		})
+		return
+	}
 	var config models.BillingConfig
 	if err := h.db.First(&config, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "配置不存在"})
 		return
 	}
 	config.BillKey = req.BillKey
-	config.BillingTag = strings.TrimSpace(req.BillingTag)
+	config.BillingTag = billingTag
 	config.MatchType = req.MatchType
 	config.MatchValue = req.MatchValue
 	config.UnitPrice = req.UnitPrice
@@ -402,7 +436,9 @@ func (h *BillingHandler) getStatsDetail(c *gin.Context, date string, tagFilter [
 	}
 
 	// 详情页的总金额应为该日全量（含 tag 筛选）
-	var sumRes struct{ S float64 `gorm:"column:s"` }
+	var sumRes struct {
+		S float64 `gorm:"column:s"`
+	}
 	sumQ := h.db.Model(&models.BillingEntry{}).Where("date = ?", date)
 	if len(tagFilter) > 0 {
 		sumQ = sumQ.Where("tag IN ?", tagFilter)

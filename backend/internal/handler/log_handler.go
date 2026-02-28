@@ -139,14 +139,28 @@ func isBillingTag(tag string, idx *indexedBillingConfig) bool {
 	return ok
 }
 
+// billingTagContains 判断 cfg.BillingTag（逗号拼接）是否包含 tag
+func billingTagContains(billingTagStr, tag string) bool {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return false
+	}
+	for _, t := range strings.Split(billingTagStr, ",") {
+		if strings.TrimSpace(t) == tag {
+			return true
+		}
+	}
+	return false
+}
+
 // matchBillingConfigs 检查日志是否匹配计费配置，返回匹配的配置列表
-// 匹配逻辑：先判断 log.tag == cfg.BillingTag，再根据 match_type/match_value 匹配
+// 匹配逻辑：先判断 log.tag 在 cfg.BillingTag 列表中（支持逗号拼接多 tag），再根据 match_type/match_value 匹配
 // 注意：仅对归属计费项目的 tag 调用此函数
 func matchBillingConfigs(req ReceiveLogRequest, idx *indexedBillingConfig) []models.BillingConfig {
 	tag := strings.TrimSpace(req.Tag)
 	var matched []models.BillingConfig
 	for _, cfg := range idx.byTag {
-		if tag != strings.TrimSpace(cfg.BillingTag) {
+		if !billingTagContains(cfg.BillingTag, tag) {
 			continue
 		}
 		if cfg.MatchValue == tag || strings.Contains(tag, cfg.MatchValue) {
@@ -154,7 +168,7 @@ func matchBillingConfigs(req ReceiveLogRequest, idx *indexedBillingConfig) []mod
 		}
 	}
 	for _, cfg := range idx.byRuleName {
-		if tag != strings.TrimSpace(cfg.BillingTag) {
+		if !billingTagContains(cfg.BillingTag, tag) {
 			continue
 		}
 		if strings.Contains(req.RuleName, cfg.MatchValue) {
@@ -162,7 +176,7 @@ func matchBillingConfigs(req ReceiveLogRequest, idx *indexedBillingConfig) []mod
 		}
 	}
 	for _, cfg := range idx.byLogLineContains {
-		if tag != strings.TrimSpace(cfg.BillingTag) {
+		if !billingTagContains(cfg.BillingTag, tag) {
 			continue
 		}
 		if strings.Contains(req.LogLine, cfg.MatchValue) {

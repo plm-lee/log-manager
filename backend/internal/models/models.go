@@ -54,7 +54,7 @@ func (MetricsEntry) TableName() string {
 type BillingConfig struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	BillKey     string    `gorm:"size:100;not null;index" json:"bill_key"`      // 计费类型标识
-	BillingTag  string    `gorm:"size:100;not null;default:'';index" json:"billing_tag"` // 新增时必选，该规则生效的 tag
+	BillingTag  string    `gorm:"size:500;not null;default:'';index" json:"billing_tag"` // 逗号拼接的 tag 列表，该规则对列出的 tag 生效
 	MatchType   string    `gorm:"size:32;not null" json:"match_type"`           // tag / rule_name / log_line_contains
 	MatchValue  string    `gorm:"size:255;not null" json:"match_value"`         // 匹配值
 	TagScope    string    `gorm:"size:500;default:''" json:"tag_scope"`         // 已废弃，保留兼容；匹配时用 billing_tag
