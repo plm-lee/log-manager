@@ -134,13 +134,14 @@ func (a *App) initRouter(tagCache *tagcache.Cache, unmatchedQueue *unmatchedqueu
 		a.router.Use(cors.New(corsConfig))
 	}
 
-	// 创建处理器实例
-	a.logHandler = handler.NewLogHandler(tagCache, unmatchedQueue)
+	// 创建处理器实例（共享 billing 缓存，tag 归属变更时立即失效以实时生效）
+	billingConfigCache := handler.NewBillingConfigCache(60 * time.Second)
+	a.logHandler = handler.NewLogHandler(tagCache, unmatchedQueue, billingConfigCache)
 	logHandler := a.logHandler
 	metricsHandler := handler.NewMetricsHandler()
 	dashboardHandler := handler.NewDashboardHandler()
 	billingHandler := handler.NewBillingHandler(unmatchedQueue)
-	tagHandler := handler.NewTagHandler(tagCache)
+	tagHandler := handler.NewTagHandler(tagCache, func() { billingConfigCache.Invalidate() })
 	authHandler := handler.NewAuthHandler(a.cfg)
 	agentConfigHandler := handler.NewAgentConfigHandler()
 

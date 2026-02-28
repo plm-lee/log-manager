@@ -32,15 +32,28 @@ type indexedBillingConfig struct {
 	billingTagSet     map[string]struct{}    // 归属计费项目的 tag，用于优先判断是否参与计费匹配
 }
 
-// billingConfigCache BillingConfig 内存缓存，减少 DB 查询，返回索引化结构
-type billingConfigCache struct {
+// BillingConfigCache BillingConfig 内存缓存，减少 DB 查询，返回索引化结构
+type BillingConfigCache struct {
 	mu       sync.RWMutex
 	indexed  *indexedBillingConfig
 	loadedAt time.Time
 	ttl      time.Duration
 }
 
-func (c *billingConfigCache) get(db *gorm.DB) (*indexedBillingConfig, error) {
+// NewBillingConfigCache 创建计费配置缓存
+func NewBillingConfigCache(ttl time.Duration) *BillingConfigCache {
+	return &BillingConfigCache{ttl: ttl}
+}
+
+// Invalidate 使缓存失效，下次 get 时将重新从 DB 加载（用于 tag 归属或计费配置变更后立即生效）
+func (c *BillingConfigCache) Invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.indexed = nil
+	c.loadedAt = time.Time{}
+}
+
+func (c *BillingConfigCache) get(db *gorm.DB) (*indexedBillingConfig, error) {
 	c.mu.RLock()
 	if time.Since(c.loadedAt) < c.ttl && c.indexed != nil {
 		idx := c.indexed
@@ -110,17 +123,20 @@ func buildIndexedBillingConfig(configs []models.BillingConfig) *indexedBillingCo
 // 负责处理日志相关的 HTTP 请求
 type LogHandler struct {
 	db            *gorm.DB
-	bccache       *billingConfigCache
+	bccache       *BillingConfigCache
 	tagCache      *tagcache.Cache
 	unmatchedQueue *unmatchedqueue.Queue
 }
 
 // NewLogHandler 创建日志处理器实例
-// tagCache 可为 nil；unmatchedQueue 可为 nil，为 nil 时无匹配不入队
-func NewLogHandler(tagCache *tagcache.Cache, unmatchedQueue *unmatchedqueue.Queue) *LogHandler {
+// tagCache 可为 nil；unmatchedQueue 可为 nil；bcCache 可为 nil，为 nil 时内部新建（TTL 60s）
+func NewLogHandler(tagCache *tagcache.Cache, unmatchedQueue *unmatchedqueue.Queue, bcCache *BillingConfigCache) *LogHandler {
+	if bcCache == nil {
+		bcCache = &BillingConfigCache{ttl: 60 * time.Second}
+	}
 	return &LogHandler{
 		db:             database.DB,
-		bccache:        &billingConfigCache{ttl: 60 * time.Second},
+		bccache:        bcCache,
 		tagCache:       tagCache,
 		unmatchedQueue: unmatchedQueue,
 	}

@@ -14,15 +14,18 @@ import (
 
 // TagHandler 标签与大项目管理
 type TagHandler struct {
-	db       *gorm.DB
-	tagCache *tagcache.Cache
+	db                   *gorm.DB
+	tagCache             *tagcache.Cache
+	invalidateBillingCache func()
 }
 
 // NewTagHandler 创建 TagHandler
-func NewTagHandler(tagCache *tagcache.Cache) *TagHandler {
+// invalidateBillingCache 可选，在 SetTagProject 成功后调用以使计费相关缓存立即生效
+func NewTagHandler(tagCache *tagcache.Cache, invalidateBillingCache func()) *TagHandler {
 	return &TagHandler{
-		db:       database.DB,
-		tagCache: tagCache,
+		db:                   database.DB,
+		tagCache:             tagCache,
+		invalidateBillingCache: invalidateBillingCache,
 	}
 }
 
@@ -113,6 +116,9 @@ func (h *TagHandler) SetTagProject(c *gin.Context) {
 	}
 	if h.tagCache != nil {
 		_ = h.tagCache.Reload()
+	}
+	if h.invalidateBillingCache != nil {
+		h.invalidateBillingCache()
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
