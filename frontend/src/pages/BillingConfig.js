@@ -73,9 +73,11 @@ const BillingConfig = () => {
 
   const handleEdit = (record) => {
     setEditingId(record.id);
+    const tagStr = record.billing_tag || '';
+    const tagArr = tagStr ? tagStr.split(',').map((s) => s.trim()).filter(Boolean) : [];
     form.setFieldsValue({
       bill_key: record.bill_key,
-      billing_tag: record.billing_tag || '',
+      billing_tag: tagArr,
       match_type: record.match_type,
       match_value: record.match_value,
       unit_price: record.unit_price,
@@ -98,7 +100,12 @@ const BillingConfig = () => {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
-      const payload = { ...values };
+      const tags = Array.isArray(values.billing_tag) ? values.billing_tag : [values.billing_tag].filter(Boolean);
+      const { billing_tag, ...rest } = values;
+      const payload = {
+        ...rest,
+        billing_tag: tags.join(','), // 后端接收 string，多个 tag 用逗号拼接
+      };
       if (editingId) {
         await billingApi.updateConfig(editingId, payload);
         message.success('更新成功');
@@ -219,18 +226,14 @@ const BillingConfig = () => {
           <Form.Item
             name="billing_tag"
             label="计费 Tag（必选）"
-            extra="请先从已标记为计费项目的标签中选择一个。该规则仅对选中的 tag 生效。若列表为空，请先在「分类管理」中将标签设置到计费项目。"
-            rules={[{ required: true, message: '请选择计费 Tag' }]}
+            extra="请从已标记为计费项目的标签中选择，可多选。该规则对选中的 tag 生效。若列表为空，请先在「分类管理」中将标签设置到计费项目。"
+            rules={[{ required: true, type: 'array', min: 1, message: '请选择至少一个计费 Tag' }]}
           >
             <Select
-              placeholder="选择计费项目下的 Tag"
+              mode="multiple"
+              placeholder="选择计费项目下的 Tag（可多选）"
               allowClear
               options={billingProjectTags.map((t) => ({ label: t, value: t }))}
-              onChange={(v) => {
-                if (v) {
-                  form.setFieldsValue({ match_type: 'tag', match_value: v });
-                }
-              }}
             />
           </Form.Item>
           <Form.Item
