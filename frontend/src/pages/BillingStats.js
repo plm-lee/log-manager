@@ -45,6 +45,7 @@ const BillingStats = () => {
   const [unmatchedLoading, setUnmatchedLoading] = useState(false);
   const [detailVisible, setDetailVisible] = useState(false);
   const [detailDate, setDetailDate] = useState('');
+  const [detailProjectIds, setDetailProjectIds] = useState([]);
   const [detailData, setDetailData] = useState([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailTotal, setDetailTotal] = useState(0);
@@ -96,13 +97,14 @@ const BillingStats = () => {
     }
   };
 
-  const loadDetail = async (dateStr, p = 1) => {
+  const loadDetail = async (dateStr, p = 1, overrideProjectIds) => {
     setDetailLoading(true);
     try {
+      const projectIds = overrideProjectIds ?? (detailProjectIds.length > 0 ? detailProjectIds : (selectedProjects.length ? selectedProjects : undefined));
       const res = await billingApi.getStatsDetail({
         date: dateStr,
         tags: selectedTags.length ? selectedTags : undefined,
-        project_ids: selectedProjects.length ? selectedProjects : undefined,
+        project_ids: projectIds,
         page: p,
         page_size: 20,
       });
@@ -116,11 +118,21 @@ const BillingStats = () => {
     }
   };
 
-  const showDetail = (dateStr) => {
+  const showDetail = (dateStr, projectId) => {
+    const projectIds = projectId != null ? [projectId] : [];
     setDetailDate(dateStr);
+    setDetailProjectIds(projectIds);
     setDetailVisible(true);
     setDetailPage(1);
-    loadDetail(dateStr, 1);
+    loadDetail(dateStr, 1, projectIds.length > 0 ? projectIds : undefined);
+  };
+
+  const showDetailForRow = (record) => {
+    if (groupBy === 'project_day' && record.project_id != null) {
+      showDetail(record.date, record.project_id);
+    } else {
+      showDetail(record.date, null);
+    }
   };
 
   const handleDetailPageChange = (p) => {
@@ -187,7 +199,7 @@ const BillingStats = () => {
         key: 'action',
         width: 100,
         render: (_, record) => (
-          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => showDetail(record.date)}>
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => showDetailForRow(record)}>
             详情
           </Button>
         ),
@@ -226,7 +238,7 @@ const BillingStats = () => {
         key: 'action',
         width: 100,
         render: (_, record) => (
-          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => showDetail(record.date)}>
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => showDetailForRow(record)}>
             详情
           </Button>
         ),
