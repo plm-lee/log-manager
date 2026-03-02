@@ -567,7 +567,7 @@ func (h *BillingHandler) getStatsDetail(c *gin.Context, date string, tagFilter [
 	}
 
 	var entries []models.BillingEntry
-	if err := q.Preload("Project").Order("bill_key ASC, tag ASC").
+	if err := q.Preload("Project").Order("amount DESC, bill_key ASC, tag ASC").
 		Limit(pageSize).
 		Offset(offset).
 		Find(&entries).Error; err != nil {
