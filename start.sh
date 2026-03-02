@@ -41,6 +41,9 @@ if [ "$MODE" = "build" ]; then
 fi
 
 # ---------- prod: 仅启动后端，托管前端 ----------
+SERVICE_NAME="log-manager"
+BINARY_PATH="$ROOT/backend/$SERVICE_NAME"
+
 if [ "$MODE" = "prod" ]; then
     command -v go >/dev/null 2>&1 || { echo "错误: 需要 Go"; exit 1; }
     if [ ! -d "$ROOT/backend/web" ]; then
@@ -54,15 +57,18 @@ if [ "$MODE" = "prod" ]; then
         fi
     fi
 
+    echo "[$SERVICE_NAME] 编译后端..."
+    (cd "$ROOT/backend" && go build -o "$SERVICE_NAME" .) || { echo "编译失败"; exit 1; }
+
     if [ "${2:-}" = "-d" ] || [ "${1:-}" = "-d" ]; then
         mkdir -p logs
-        echo "生产模式（后台）: http://localhost:8888/log/manager"
-        (cd "$ROOT/backend" && CONFIG=config.prod.yaml go run main.go >> "$ROOT/logs/backend.log" 2>&1) &
+        echo "[$SERVICE_NAME] 生产模式（后台）: http://localhost:8888/log/manager"
+        (cd "$ROOT/backend" && CONFIG=config.prod.yaml exec "./$SERVICE_NAME" >> "$ROOT/logs/backend.log" 2>&1) &
         echo $! > .pids
-        echo "使用 ./stop.sh 停止"
+        echo "[$SERVICE_NAME] PID: $(cat .pids)，使用 ./stop.sh 停止"
     else
-        echo "生产模式: http://localhost:8888/log/manager"
-        cd "$ROOT/backend" && CONFIG=config.prod.yaml go run main.go
+        echo "[$SERVICE_NAME] 生产模式: http://localhost:8888/log/manager"
+        cd "$ROOT/backend" && CONFIG=config.prod.yaml exec "./$SERVICE_NAME"
     fi
     exit 0
 fi
@@ -70,6 +76,9 @@ fi
 # ---------- dev: 后端 + 前端开发服务器（需显式指定 ./start.sh dev）----------
 DAEMON=false
 [ "$MODE" = "dev" ] && [ "${2:-}" = "-d" ] && DAEMON=true
+
+SERVICE_NAME="${SERVICE_NAME:-log-manager}"
+BINARY_PATH="$ROOT/backend/$SERVICE_NAME"
 
 command -v go >/dev/null 2>&1 || { echo "错误: 需要 Go"; exit 1; }
 command -v npm >/dev/null 2>&1 || { echo "错误: 需要 Node.js/npm"; exit 1; }
@@ -109,8 +118,10 @@ else
     REDIRECT_FRONTEND=""
 fi
 
-echo "启动后端..."
-eval "(cd backend && go run main.go) $REDIRECT_BACKEND" &
+echo "[$SERVICE_NAME] 编译后端..."
+(cd backend && go build -o "$SERVICE_NAME" .) || { echo "编译失败"; exit 1; }
+echo "[$SERVICE_NAME] 启动后端..."
+eval "(cd backend && ./$SERVICE_NAME) $REDIRECT_BACKEND" &
 BACKEND_PID=$!
 [ "$DAEMON" = true ] && echo "$BACKEND_PID" > .pids
 
@@ -126,7 +137,7 @@ FRONTEND_PID=$!
 [ "$DAEMON" = true ] && echo "$FRONTEND_PID" >> .pids
 
 echo ""
-echo "=== log-manager 已启动 ==="
+echo "=== [$SERVICE_NAME] 已启动 ==="
 echo "后端: http://localhost:8888"
 echo "前端: http://localhost:3000"
 echo ""
