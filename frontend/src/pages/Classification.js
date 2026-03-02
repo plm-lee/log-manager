@@ -53,10 +53,10 @@ const Classification = () => {
     loadData();
   }, []);
 
-  const billingProject = projects.find((p) => p.type === 'billing');
+  const billingProjects = projects.filter((p) => p.type === 'billing');
   const normalProjects = projects.filter((p) => p.type !== 'billing');
   const projectOptions = [
-    ...(billingProject ? [{ label: `${billingProject.name}（计费）`, value: billingProject.id }] : []),
+    ...billingProjects.map((p) => ({ label: `${p.name}（计费）`, value: p.id })),
     ...normalProjects.map((p) => ({ label: p.name, value: p.id })),
     { label: '无', value: null },
   ];
@@ -96,11 +96,13 @@ const Classification = () => {
   const handleProjectSubmit = async () => {
     try {
       const values = await projectForm.validateFields();
+      const payload = { name: values.name, description: values.description };
       if (editingProject) {
-        await tagProjectApi.update(editingProject.id, values);
+        await tagProjectApi.update(editingProject.id, payload);
         message.success('更新成功');
       } else {
-        await tagProjectApi.create(values);
+        if (values.type) payload.type = values.type;
+        await tagProjectApi.create(payload);
         message.success('创建成功');
       }
       setProjectModalVisible(false);
@@ -152,9 +154,9 @@ const Classification = () => {
       key: 'action',
       width: 100,
       render: (_, record) => (
-        <a onClick={() => navigate(`/logs?tag=${encodeURIComponent(record.tag)}`)}>
+        <Button type="link" size="small" style={{ padding: 0 }} onClick={() => navigate(`/logs?tag=${encodeURIComponent(record.tag)}`)}>
           查看日志
-        </a>
+        </Button>
       ),
     },
   ];
@@ -254,10 +256,21 @@ const Classification = () => {
         okText="确定"
         cancelText="取消"
       >
-        <Form form={projectForm} layout="vertical">
+        <Form form={projectForm} layout="vertical" initialValues={{ type: 'normal' }}>
           <Form.Item name="name" label="项目名称" rules={[{ required: true }]}>
-            <Input placeholder="如：计费项目、业务A" />
+            <Input placeholder="如：美团、饿了么、计费项目" />
           </Form.Item>
+          {!editingProject && (
+            <Form.Item name="type" label="项目类型">
+              <Select
+                options={[
+                  { value: 'normal', label: '普通项目' },
+                  { value: 'billing', label: '计费项目' },
+                ]}
+                placeholder="选择类型"
+              />
+            </Form.Item>
+          )}
           <Form.Item name="description" label="描述">
             <Input.TextArea rows={2} placeholder="可选" />
           </Form.Item>

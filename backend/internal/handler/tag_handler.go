@@ -168,6 +168,7 @@ func (h *TagHandler) ListTagProjects(c *gin.Context) {
 type CreateTagProjectReq struct {
 	Name        string `json:"name" binding:"required"`
 	Description string `json:"description"`
+	Type        string `json:"type"` // normal | billing，默认 normal
 }
 
 // CreateTagProject 创建大项目
@@ -177,9 +178,13 @@ func (h *TagHandler) CreateTagProject(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	projectType := strings.TrimSpace(req.Type)
+	if projectType != "billing" {
+		projectType = "normal"
+	}
 	p := models.TagProject{
 		Name:        strings.TrimSpace(req.Name),
-		Type:        "normal",
+		Type:        projectType,
 		Description: strings.TrimSpace(req.Description),
 	}
 	if err := h.db.Create(&p).Error; err != nil {
@@ -221,22 +226,54 @@ func (h *TagHandler) UpdateTagProject(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": p})
 }
 
-// GetBillingProjectTags 获取归属计费项目的 tag 列表（供计费配置新增时选择）
+// BillingProjectTag 计费项目下的 tag（含项目信息）
+type BillingProjectTag struct {
+	Tag         string `json:"tag"`
+	ProjectID   uint   `json:"project_id"`
+	ProjectName string `json:"project_name"`
+}
+
+// GetBillingProjectTags 获取归属所有计费项目的 tag 列表（供计费配置新增时选择）
+// 返回 [{ tag, project_id, project_name }]
 func (h *TagHandler) GetBillingProjectTags(c *gin.Context) {
-	var billingProject models.TagProject
-	if err := h.db.Where("type = ?", "billing").First(&billingProject).Error; err != nil {
-		c.JSON(http.StatusOK, gin.H{"data": []string{}})
-		return
-	}
-	var names []string
-	if err := h.db.Model(&models.Tag{}).Where("project_id = ?", billingProject.ID).Pluck("name", &names).Error; err != nil {
+	var projects []models.TagProject
+	if err := h.db.Where("type = ?", "billing").Order("id ASC").Find(&projects).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if names == nil {
-		names = []string{}
+	projectNames := make(map[uint]string)
+	for _, p := range projects {
+		projectNames[p.ID] = p.Name
 	}
-	c.JSON(http.StatusOK, gin.H{"data": names})
+	ids := projectIDs(projects)
+	if len(ids) == 0 {
+		c.JSON(http.StatusOK, gin.H{"data": []BillingProjectTag{}})
+		return
+	}
+	var tags []models.Tag
+	if err := h.db.Where("project_id IN ?", ids).Find(&tags).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	result := make([]BillingProjectTag, 0, len(tags))
+	for _, t := range tags {
+		if t.ProjectID != nil {
+			result = append(result, BillingProjectTag{
+				Tag:         t.Name,
+				ProjectID:   *t.ProjectID,
+				ProjectName: projectNames[*t.ProjectID],
+			})
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+func projectIDs(projects []models.TagProject) []uint {
+	ids := make([]uint, 0, len(projects))
+	for _, p := range projects {
+		ids = append(ids, p.ID)
+	}
+	return ids
 }
 
 // DeleteTagProject 删除大项目（计费项目不可删）

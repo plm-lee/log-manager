@@ -207,16 +207,35 @@ func (h *BillingHandler) DeleteConfig(c *gin.Context) {
 
 // BillingStatItem 计费统计项（明细）
 type BillingStatItem struct {
-	Date      string  `json:"date"`
-	BillKey   string  `json:"bill_key"`
-	Tag       string  `json:"tag"`
-	Count     int64   `json:"count"`
-	UnitPrice float64 `json:"unit_price"`
-	Amount    float64 `json:"amount"`
+	Date        string  `json:"date"`
+	BillKey     string  `json:"bill_key"`
+	Tag         string  `json:"tag"`
+	ProjectID   *uint   `json:"project_id,omitempty"`
+	ProjectName string  `json:"project_name,omitempty"`
+	Count       int64   `json:"count"`
+	UnitPrice   float64 `json:"unit_price"`
+	Amount      float64 `json:"amount"`
 }
 
 // DailyStatItem 按日汇总项
 type DailyStatItem struct {
+	Date        string  `json:"date"`
+	TotalCount  int64   `json:"total_count"`
+	TotalAmount float64 `json:"total_amount"`
+}
+
+// ProjectStatItem 按项目汇总项
+type ProjectStatItem struct {
+	ProjectID   uint    `json:"project_id"`
+	ProjectName string  `json:"project_name"`
+	TotalCount  int64   `json:"total_count"`
+	TotalAmount float64 `json:"total_amount"`
+}
+
+// ProjectDailyStatItem 按项目+日汇总项
+type ProjectDailyStatItem struct {
+	ProjectID   uint    `json:"project_id"`
+	ProjectName string  `json:"project_name"`
 	Date        string  `json:"date"`
 	TotalCount  int64   `json:"total_count"`
 	TotalAmount float64 `json:"total_amount"`
@@ -229,11 +248,11 @@ type GetStatsResponse struct {
 	TotalAmount float64           `json:"total_amount"`
 }
 
-// GetStatsSummaryResponse 按日汇总响应
+// GetStatsSummaryResponse 按日/按项目汇总响应
 type GetStatsSummaryResponse struct {
-	Data        []DailyStatItem `json:"data"`
-	Total       int64           `json:"total"`
-	TotalAmount float64         `json:"total_amount"`
+	Data        interface{} `json:"data"` // []DailyStatItem | []ProjectStatItem | []ProjectDailyStatItem
+	Total       int64       `json:"total"`
+	TotalAmount float64     `json:"total_amount"`
 }
 
 // GetStats 计费统计
@@ -278,6 +297,24 @@ func (h *BillingHandler) GetStats(c *gin.Context) {
 		}
 	}
 
+	// 可选 project_ids 过滤：按计费大项目筛选
+	projectIDs := c.QueryArray("project_ids")
+	var projectFilter []uint
+	for _, s := range projectIDs {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if v, err := strconv.ParseUint(s, 10, 32); err == nil && v > 0 {
+			projectFilter = append(projectFilter, uint(v))
+		}
+	}
+
+	groupBy := strings.TrimSpace(c.Query("group_by"))
+	if groupBy == "" {
+		groupBy = "day"
+	}
+
 	targetDate := c.Query("date")
 
 	// 日明细模式：传 date 时返回该日明细
@@ -289,15 +326,26 @@ func (h *BillingHandler) GetStats(c *gin.Context) {
 			})
 			return
 		}
-		h.getStatsDetail(c, targetDate, tagFilter)
+		h.getStatsDetail(c, targetDate, tagFilter, projectFilter)
 		return
 	}
 
-	// 按日汇总模式（默认）
-	h.getStatsSummary(c, startDate, endDate, tagFilter)
+	// 汇总模式（按日 / 按项目 / 按项目+日）
+	h.getStatsSummary(c, startDate, endDate, tagFilter, projectFilter, groupBy)
 }
 
-func (h *BillingHandler) getStatsSummary(c *gin.Context, startDate, endDate string, tagFilter []string) {
+func applyBillingFilters(q *gorm.DB, startDate, endDate string, tagFilter []string, projectFilter []uint) *gorm.DB {
+	q = q.Where("date >= ? AND date <= ?", startDate, endDate)
+	if len(tagFilter) > 0 {
+		q = q.Where("tag IN ?", tagFilter)
+	}
+	if len(projectFilter) > 0 {
+		q = q.Where("project_id IN ?", projectFilter)
+	}
+	return q
+}
+
+func (h *BillingHandler) getStatsSummary(c *gin.Context, startDate, endDate string, tagFilter []string, projectFilter []uint, groupBy string) {
 	page := 1
 	if p := c.Query("page"); p != "" {
 		if v, err := parseIntDefault(p, 1); err == nil && v >= 1 {
@@ -312,12 +360,22 @@ func (h *BillingHandler) getStatsSummary(c *gin.Context, startDate, endDate stri
 	}
 	offset := (page - 1) * pageSize
 
-	baseQ := h.db.Model(&models.BillingEntry{}).
-		Where("date >= ? AND date <= ?", startDate, endDate)
-	if len(tagFilter) > 0 {
-		baseQ = baseQ.Where("tag IN ?", tagFilter)
-	}
+	baseQ := applyBillingFilters(h.db.Model(&models.BillingEntry{}), startDate, endDate, tagFilter, projectFilter)
 
+	switch groupBy {
+	case "project":
+		h.getStatsSummaryByProject(c, baseQ, page, pageSize, offset, startDate, endDate, tagFilter, projectFilter)
+		return
+	case "project_day":
+		h.getStatsSummaryByProjectDay(c, baseQ, page, pageSize, offset, startDate, endDate, tagFilter, projectFilter)
+		return
+	default:
+		// group_by=day（默认）
+		h.getStatsSummaryByDay(c, baseQ, page, pageSize, offset, startDate, endDate, tagFilter, projectFilter)
+	}
+}
+
+func (h *BillingHandler) getStatsSummaryByDay(c *gin.Context, baseQ *gorm.DB, page, pageSize, offset int, startDate, endDate string, tagFilter []string, projectFilter []uint) {
 	type dailyRow struct {
 		Date        string
 		TotalCount  int64
@@ -326,57 +384,157 @@ func (h *BillingHandler) getStatsSummary(c *gin.Context, startDate, endDate stri
 
 	var totalDays int64
 	if err := baseQ.Distinct("date").Count(&totalDays).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "统计失败",
-			"message": err.Error(),
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "统计失败", "message": err.Error()})
 		return
 	}
 
 	var rows []dailyRow
-	// 按 date DESC 排序，分页
-	subQ := baseQ.Select("date, SUM(count) as total_count, SUM(amount) as total_amount").
+	if err := baseQ.Select("date, SUM(count) as total_count, SUM(amount) as total_amount").
 		Group("date").
 		Order("date DESC").
 		Limit(pageSize).
-		Offset(offset)
-	if err := subQ.Scan(&rows).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "统计失败",
-			"message": err.Error(),
-		})
+		Offset(offset).
+		Scan(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "统计失败", "message": err.Error()})
 		return
 	}
 
-	// 计算全量 total_amount（汇总金额，使用 Row().Scan 确保正确读取聚合结果）
+	sumQ := applyBillingFilters(h.db.Model(&models.BillingEntry{}), startDate, endDate, tagFilter, projectFilter)
 	var totalAmount float64
-	sumQ := h.db.Model(&models.BillingEntry{}).
-		Where("date >= ? AND date <= ?", startDate, endDate)
-	if len(tagFilter) > 0 {
-		sumQ = sumQ.Where("tag IN ?", tagFilter)
-	}
-	row := sumQ.Select("COALESCE(SUM(amount), 0)").Row()
-	if err := row.Scan(&totalAmount); err != nil {
-		totalAmount = 0
+	if row := sumQ.Select("COALESCE(SUM(amount), 0)").Row(); row != nil {
+		_ = row.Scan(&totalAmount)
 	}
 
 	result := make([]DailyStatItem, 0, len(rows))
 	for _, r := range rows {
-		result = append(result, DailyStatItem{
+		result = append(result, DailyStatItem{Date: r.Date, TotalCount: r.TotalCount, TotalAmount: r.TotalAmount})
+	}
+	c.JSON(http.StatusOK, GetStatsSummaryResponse{Data: result, Total: totalDays, TotalAmount: totalAmount})
+}
+
+func (h *BillingHandler) getStatsSummaryByProject(c *gin.Context, baseQ *gorm.DB, page, pageSize, offset int, startDate, endDate string, tagFilter []string, projectFilter []uint) {
+	type projectRow struct {
+		ProjectID   uint
+		TotalCount  int64
+		TotalAmount float64
+	}
+
+	var rows []projectRow
+	q := baseQ.Select("COALESCE(project_id, 0) as project_id, SUM(count) as total_count, SUM(amount) as total_amount").
+		Group("COALESCE(project_id, 0)").
+		Order("total_amount DESC").
+		Limit(pageSize).
+		Offset(offset)
+	if err := q.Scan(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "统计失败", "message": err.Error()})
+		return
+	}
+
+	var pidList []uint
+	for _, r := range rows {
+		pidList = append(pidList, r.ProjectID)
+	}
+	projectNames := h.loadProjectNames(pidList)
+
+	sumQ := applyBillingFilters(h.db.Model(&models.BillingEntry{}), startDate, endDate, tagFilter, projectFilter)
+	var totalAmount float64
+	if row := sumQ.Select("COALESCE(SUM(amount), 0)").Row(); row != nil {
+		_ = row.Scan(&totalAmount)
+	}
+
+	var total int64
+	countQ := baseQ.Select("COALESCE(project_id, 0)").Group("COALESCE(project_id, 0)")
+	h.db.Table("(?) as t", countQ).Count(&total)
+
+	result := make([]ProjectStatItem, 0, len(rows))
+	for _, r := range rows {
+		result = append(result, ProjectStatItem{
+			ProjectID:   r.ProjectID,
+			ProjectName: projectNames[r.ProjectID],
+			TotalCount:  r.TotalCount,
+			TotalAmount: r.TotalAmount,
+		})
+	}
+	c.JSON(http.StatusOK, GetStatsSummaryResponse{Data: result, Total: total, TotalAmount: totalAmount})
+}
+
+func (h *BillingHandler) getStatsSummaryByProjectDay(c *gin.Context, baseQ *gorm.DB, page, pageSize, offset int, startDate, endDate string, tagFilter []string, projectFilter []uint) {
+	type projectDayRow struct {
+		ProjectID   uint
+		Date        string
+		TotalCount  int64
+		TotalAmount float64
+	}
+
+	var rows []projectDayRow
+	q := baseQ.Select("COALESCE(project_id, 0) as project_id, date, SUM(count) as total_count, SUM(amount) as total_amount").
+		Group("COALESCE(project_id, 0), date").
+		Order("date DESC, project_id ASC").
+		Limit(pageSize).
+		Offset(offset)
+	if err := q.Scan(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "统计失败", "message": err.Error()})
+		return
+	}
+
+	var pidList []uint
+	seen := make(map[uint]bool)
+	for _, r := range rows {
+		if !seen[r.ProjectID] {
+			seen[r.ProjectID] = true
+			pidList = append(pidList, r.ProjectID)
+		}
+	}
+	projectNames := h.loadProjectNames(pidList)
+
+	sumQ := applyBillingFilters(h.db.Model(&models.BillingEntry{}), startDate, endDate, tagFilter, projectFilter)
+	var totalAmount float64
+	if row := sumQ.Select("COALESCE(SUM(amount), 0)").Row(); row != nil {
+		_ = row.Scan(&totalAmount)
+	}
+
+	var total int64
+	countQ := baseQ.Select("COALESCE(project_id, 0), date").Group("COALESCE(project_id, 0), date")
+	h.db.Table("(?) as t", countQ).Count(&total)
+
+	result := make([]ProjectDailyStatItem, 0, len(rows))
+	for _, r := range rows {
+		result = append(result, ProjectDailyStatItem{
+			ProjectID:   r.ProjectID,
+			ProjectName: projectNames[r.ProjectID],
 			Date:        r.Date,
 			TotalCount:  r.TotalCount,
 			TotalAmount: r.TotalAmount,
 		})
 	}
-
-	c.JSON(http.StatusOK, GetStatsSummaryResponse{
-		Data:        result,
-		Total:       totalDays,
-		TotalAmount: totalAmount,
-	})
+	c.JSON(http.StatusOK, GetStatsSummaryResponse{Data: result, Total: total, TotalAmount: totalAmount})
 }
 
-func (h *BillingHandler) getStatsDetail(c *gin.Context, date string, tagFilter []string) {
+func (h *BillingHandler) loadProjectNames(ids []uint) map[uint]string {
+	out := make(map[uint]string)
+	if len(ids) == 0 {
+		return out
+	}
+	var projects []models.TagProject
+	if err := h.db.Where("id IN ?", ids).Find(&projects).Error; err != nil {
+		return out
+	}
+	for _, p := range projects {
+		out[p.ID] = p.Name
+	}
+	// project_id=0 时显示为「未归属」
+	if len(ids) > 0 {
+		for _, id := range ids {
+			if id == 0 && out[0] == "" {
+				out[0] = "未归属"
+				break
+			}
+		}
+	}
+	return out
+}
+
+func (h *BillingHandler) getStatsDetail(c *gin.Context, date string, tagFilter []string, projectFilter []uint) {
 	page := 1
 	if p := c.Query("page"); p != "" {
 		if v, err := parseIntDefault(p, 1); err == nil && v >= 1 {
@@ -395,6 +553,9 @@ func (h *BillingHandler) getStatsDetail(c *gin.Context, date string, tagFilter [
 	if len(tagFilter) > 0 {
 		q = q.Where("tag IN ?", tagFilter)
 	}
+	if len(projectFilter) > 0 {
+		q = q.Where("project_id IN ?", projectFilter)
+	}
 
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
@@ -406,7 +567,7 @@ func (h *BillingHandler) getStatsDetail(c *gin.Context, date string, tagFilter [
 	}
 
 	var entries []models.BillingEntry
-	if err := q.Order("bill_key ASC, tag ASC").
+	if err := q.Preload("Project").Order("bill_key ASC, tag ASC").
 		Limit(pageSize).
 		Offset(offset).
 		Find(&entries).Error; err != nil {
@@ -424,24 +585,33 @@ func (h *BillingHandler) getStatsDetail(c *gin.Context, date string, tagFilter [
 		if e.Count > 0 {
 			unitPrice = e.Amount / float64(e.Count)
 		}
+		projectName := ""
+		if e.Project != nil {
+			projectName = e.Project.Name
+		}
 		result = append(result, BillingStatItem{
-			Date:      e.Date,
-			BillKey:   e.BillKey,
-			Tag:       e.Tag,
-			Count:     e.Count,
-			UnitPrice: unitPrice,
-			Amount:    e.Amount,
+			Date:        e.Date,
+			BillKey:     e.BillKey,
+			Tag:         e.Tag,
+			ProjectID:   e.ProjectID,
+			ProjectName: projectName,
+			Count:       e.Count,
+			UnitPrice:   unitPrice,
+			Amount:      e.Amount,
 		})
 		totalAmount += e.Amount
 	}
 
-	// 详情页的总金额应为该日全量（含 tag 筛选）
+	// 详情页的总金额应为该日全量（含 tag、project 筛选）
 	var sumRes struct {
 		S float64 `gorm:"column:s"`
 	}
 	sumQ := h.db.Model(&models.BillingEntry{}).Where("date = ?", date)
 	if len(tagFilter) > 0 {
 		sumQ = sumQ.Where("tag IN ?", tagFilter)
+	}
+	if len(projectFilter) > 0 {
+		sumQ = sumQ.Where("project_id IN ?", projectFilter)
 	}
 	sumQ.Select("COALESCE(SUM(amount), 0) as s").Scan(&sumRes)
 	dayTotal := sumRes.S

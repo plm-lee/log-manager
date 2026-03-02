@@ -33,6 +33,8 @@ type indexedBillingConfig struct {
 	byLogLineContains []models.BillingConfig // match_type=log_line_contains
 	tagSet            map[string]struct{}    // tag 规则的 match_value 集合
 	billingTagSet     map[string]struct{}    // 归属计费项目的 tag，用于优先判断是否参与计费匹配
+	tagToProjectID    map[string]uint        // tag -> project_id（仅 billing 项目）
+	defaultProjectID  uint                   // 默认计费项目 id，用于无映射时
 }
 
 // BillingConfigCache BillingConfig 内存缓存，减少 DB 查询，返回索引化结构
@@ -75,29 +77,48 @@ func (c *BillingConfigCache) get(db *gorm.DB) (*indexedBillingConfig, error) {
 		return nil, err
 	}
 	idx := buildIndexedBillingConfig(configs)
-	idx.billingTagSet = loadBillingTagSet(db)
+	idx.billingTagSet, idx.tagToProjectID, idx.defaultProjectID = loadBillingTagSetAndProjectMapping(db)
 	c.indexed = idx
 	c.loadedAt = time.Now()
 	return idx, nil
 }
 
-// loadBillingTagSet 从 tags 表加载归属计费项目的 tag 集合
-func loadBillingTagSet(db *gorm.DB) map[string]struct{} {
-	set := make(map[string]struct{})
-	var projectID uint
-	if err := db.Model(&models.TagProject{}).Where("type = ?", "billing").Limit(1).Pluck("id", &projectID).Error; err != nil || projectID == 0 {
-		return set
+// loadBillingTagSetAndProjectMapping 从 tags 表加载归属所有计费项目的 tag 集合及 tag->project_id 映射
+func loadBillingTagSetAndProjectMapping(db *gorm.DB) (billingTagSet map[string]struct{}, tagToProjectID map[string]uint, defaultProjectID uint) {
+	billingTagSet = make(map[string]struct{})
+	tagToProjectID = make(map[string]uint)
+	var projectIDs []uint
+	if err := db.Model(&models.TagProject{}).Where("type = ?", "billing").Order("id ASC").Pluck("id", &projectIDs).Error; err != nil || len(projectIDs) == 0 {
+		return billingTagSet, tagToProjectID, 0
 	}
-	var names []string
-	if err := db.Model(&models.Tag{}).Where("project_id = ?", projectID).Pluck("name", &names).Error; err != nil {
-		return set
+	defaultProjectID = projectIDs[0]
+	var tags []models.Tag
+	if err := db.Where("project_id IN ?", projectIDs).Find(&tags).Error; err != nil {
+		return billingTagSet, tagToProjectID, defaultProjectID
 	}
-	for _, n := range names {
-		if n != "" {
-			set[strings.TrimSpace(n)] = struct{}{}
+	for _, t := range tags {
+		n := strings.TrimSpace(t.Name)
+		if n != "" && t.ProjectID != nil {
+			billingTagSet[n] = struct{}{}
+			tagToProjectID[n] = *t.ProjectID
 		}
 	}
-	return set
+	return billingTagSet, tagToProjectID, defaultProjectID
+}
+
+// resolveProjectID 从 log 的 tag 中取第一个归属计费项目的 tag，返回其 project_id
+func resolveProjectID(logTag string, idx *indexedBillingConfig) uint {
+	for _, t := range parseLogTags(logTag) {
+		if idx.tagToProjectID != nil {
+			if pid, ok := idx.tagToProjectID[t]; ok {
+				return pid
+			}
+		}
+	}
+	if idx.defaultProjectID != 0 {
+		return idx.defaultProjectID
+	}
+	return 0
 }
 
 func buildIndexedBillingConfig(configs []models.BillingConfig) *indexedBillingConfig {
@@ -241,20 +262,21 @@ func matchBillingConfigs(req ReceiveLogRequest, idx *indexedBillingConfig) []mod
 	return matched
 }
 
-// upsertBillingEntry 按 (date, bill_key, tag) 聚合计费数据，存在则累加
-func (h *LogHandler) upsertBillingEntry(date string, billKey string, tag string, addCount int64, addAmount float64) error {
+// upsertBillingEntry 按 (date, bill_key, tag, project_id) 聚合计费数据，存在则累加
+func (h *LogHandler) upsertBillingEntry(date string, billKey string, tag string, projectID *uint, addCount int64, addAmount float64) error {
 	now := time.Now()
 	entry := models.BillingEntry{
 		Date:      date,
 		BillKey:   billKey,
 		Tag:       tag,
+		ProjectID: projectID,
 		Count:     addCount,
 		Amount:    addAmount,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 	return h.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "date"}, {Name: "bill_key"}, {Name: "tag"}},
+		Columns:   []clause.Column{{Name: "date"}, {Name: "bill_key"}, {Name: "tag"}, {Name: "project_id"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"count":      gorm.Expr("count + ?", addCount),
 			"amount":     gorm.Expr("amount + ?", addAmount),
@@ -273,6 +295,7 @@ type ReceiveLogRequest struct {
 	LogFile   string `json:"log_file"`                     // 日志文件路径
 	Pattern   string `json:"pattern"`                      // 匹配模式
 	Tag       string `json:"tag"`                          // 标签
+	Host      string `json:"host"`                         // 来源服务器/节点名称
 	Secret    string `json:"secret"`                       // UDP 认证密钥（可选，与 udp.secret 一致时校验）
 	APIKey    string `json:"api_key"`                      // 同 secret，兼容两种字段名
 	Transport string `json:"-"`                            // 来源：http / udp，内部标记，不入库
@@ -298,6 +321,12 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 		return 0, 0, nil, err
 	}
 
+	hostCounts := make(map[string]int64)
+	for _, logReq := range logs {
+		h := strings.TrimSpace(logReq.Host)
+		hostCounts[h]++
+	}
+
 	agg := make(map[string]*billingAggregate)
 	logEntries := make([]models.LogEntry, 0, len(logs))
 	now := time.Now()
@@ -313,6 +342,7 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 		}
 		tag := strings.TrimSpace(logReq.Tag)
 		if !isBillingTag(logReq.Tag, idx) {
+			host := strings.TrimSpace(logReq.Host)
 			logEntries = append(logEntries, models.LogEntry{
 				Timestamp: logReq.Timestamp,
 				RuleName:  logReq.RuleName,
@@ -321,6 +351,7 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 				LogFile:   logReq.LogFile,
 				Pattern:   logReq.Pattern,
 				Tag:       logReq.Tag,
+				Host:      host,
 				Source:    "agent",
 				CreatedAt: now,
 				UpdatedAt: now,
@@ -330,8 +361,9 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 		matched := matchBillingConfigs(logReq, idx)
 		if len(matched) > 0 {
 			date := time.Unix(logReq.Timestamp, 0).Format("2006-01-02")
+			projectID := resolveProjectID(logReq.Tag, idx)
 			for _, cfg := range matched {
-				key := date + "|" + cfg.BillKey + "|" + tag
+				key := date + "|" + cfg.BillKey + "|" + tag + "|" + strconv.FormatUint(uint64(projectID), 10)
 				if agg[key] == nil {
 					agg[key] = &billingAggregate{}
 				}
@@ -349,19 +381,27 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 		if len(agg) > 0 {
 			entries := make([]models.BillingEntry, 0, len(agg))
 			for key, v := range agg {
-				// key: date|bill_key|tag
-				parts := strings.SplitN(key, "|", 3)
+				// key: date|bill_key|tag|projectID
+				parts := strings.SplitN(key, "|", 4)
 				if len(parts) < 2 {
 					continue
 				}
 				tag := ""
-				if len(parts) == 3 {
+				if len(parts) >= 3 {
 					tag = parts[2]
+				}
+				var projectID *uint
+				if len(parts) >= 4 {
+					if pid, err := strconv.ParseUint(parts[3], 10, 32); err == nil && pid > 0 {
+						p := uint(pid)
+						projectID = &p
+					}
 				}
 				entries = append(entries, models.BillingEntry{
 					Date:      parts[0],
 					BillKey:   parts[1],
 					Tag:       tag,
+					ProjectID: projectID,
 					Count:     v.count,
 					Amount:    v.amount,
 					CreatedAt: now,
@@ -370,7 +410,7 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 			}
 			if len(entries) > 0 {
 				if err := tx.Clauses(clause.OnConflict{
-					Columns:   []clause.Column{{Name: "date"}, {Name: "bill_key"}, {Name: "tag"}},
+					Columns:   []clause.Column{{Name: "date"}, {Name: "bill_key"}, {Name: "tag"}, {Name: "project_id"}},
 					DoUpdates: clause.Assignments(map[string]interface{}{
 						"count":      gorm.Expr("count + VALUES(`count`)"),
 						"amount":     gorm.Expr("amount + VALUES(`amount`)"),
@@ -399,6 +439,18 @@ func (h *LogHandler) ProcessLogBatch(logs []ReceiveLogRequest) (successCount, fa
 				}
 			}
 			if err := taglogcount.IncrByTagDeltas(tx, deltas); err != nil {
+				return err
+			}
+		}
+		for host, count := range hostCounts {
+			stat := models.AgentNodeStat{Host: host, LogCount: count, LastReportedAt: now}
+			if err := tx.Clauses(clause.OnConflict{
+				Columns: []clause.Column{{Name: "host"}},
+				DoUpdates: clause.Assignments(map[string]interface{}{
+					"log_count":        gorm.Expr("log_count + ?", count),
+					"last_reported_at": now,
+				}),
+			}).Create(&stat).Error; err != nil {
 				return err
 			}
 		}

@@ -12,7 +12,9 @@ import (
 type Config struct {
 	Server           ServerConfig    `yaml:"server"`             // 服务器配置
 	Database         DatabaseConfig  `yaml:"database"`           // 数据库配置
-	LogRetentionDays int             `yaml:"log_retention_days"` // 日志保留天数
+	LogRetentionDays    int             `yaml:"log_retention_days"`     // 日志保留天数
+	StorageWarnMB       int             `yaml:"storage_warn_mb"`        // 存储黄色警告阈值（MB），默认 500
+	StorageCriticalMB   int             `yaml:"storage_critical_mb"`    // 存储红色告警阈值（MB），默认 1000
 	CORS             CORSConfig      `yaml:"cors"`               // CORS 配置
 	RateLimit        RateLimitConfig `yaml:"rate_limit"`         // 限流配置
 	Auth             AuthConfig      `yaml:"auth"`               // 认证配置
@@ -178,6 +180,12 @@ func LoadConfig(filePath string) (*Config, error) {
 	}
 	if cfg.TCP.FlushSize <= 0 {
 		cfg.TCP.FlushSize = 1000
+	}
+	if cfg.StorageWarnMB <= 0 {
+		cfg.StorageWarnMB = 500
+	}
+	if cfg.StorageCriticalMB <= 0 {
+		cfg.StorageCriticalMB = 1000
 	}
 
 	return &cfg, nil

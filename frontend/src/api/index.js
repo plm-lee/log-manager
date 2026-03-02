@@ -216,22 +216,21 @@ const billingApi = {
     }
     return api.get(url);
   },
-  /** 计费按日汇总（主列表，分页） */
+  /** 计费按日/按项目汇总（主列表，分页） */
   getStatsSummary: (params) => {
-    const { start_date, end_date, tags, page = 1, page_size = 20 } = params;
+    const { start_date, end_date, tags, project_ids, group_by, page = 1, page_size = 20 } = params;
     let url = `/billing/stats?start_date=${encodeURIComponent(start_date)}&end_date=${encodeURIComponent(end_date)}&page=${page}&page_size=${page_size}`;
-    if (tags && tags.length) {
-      tags.forEach((t) => { url += `&tags=${encodeURIComponent(t)}`; });
-    }
+    if (tags && tags.length) tags.forEach((t) => { url += `&tags=${encodeURIComponent(t)}`; });
+    if (project_ids && project_ids.length) project_ids.forEach((id) => { url += `&project_ids=${id}`; });
+    if (group_by) url += `&group_by=${encodeURIComponent(group_by)}`;
     return api.get(url);
   },
   /** 计费日明细（详情弹窗，分页） */
   getStatsDetail: (params) => {
-    const { date, tags, page = 1, page_size = 20 } = params;
+    const { date, tags, project_ids, page = 1, page_size = 20 } = params;
     let url = `/billing/stats?start_date=${date}&end_date=${date}&date=${encodeURIComponent(date)}&page=${page}&page_size=${page_size}`;
-    if (tags && tags.length) {
-      tags.forEach((t) => { url += `&tags=${encodeURIComponent(t)}`; });
-    }
+    if (tags && tags.length) tags.forEach((t) => { url += `&tags=${encodeURIComponent(t)}`; });
+    if (project_ids && project_ids.length) project_ids.forEach((id) => { url += `&project_ids=${id}`; });
     return api.get(url);
   },
 };

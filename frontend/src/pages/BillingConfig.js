@@ -233,7 +233,10 @@ const BillingConfig = () => {
               mode="multiple"
               placeholder="选择计费项目下的 Tag（可多选）"
               allowClear
-              options={billingProjectTags.map((t) => ({ label: t, value: t }))}
+              options={billingProjectTags.map((t) => ({
+                label: typeof t === 'string' ? t : (t.project_name ? `${t.tag} (${t.project_name})` : t.tag),
+                value: typeof t === 'string' ? t : t.tag,
+              }))}
             />
           </Form.Item>
           <Form.Item

@@ -15,7 +15,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { SearchOutlined, SettingOutlined, WarningOutlined, EyeOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { billingApi } from '../api';
+import { billingApi, tagProjectApi } from '../api';
 
 const { RangePicker } = DatePicker;
 const { Title, Text } = Typography;
@@ -38,6 +38,9 @@ const BillingStats = () => {
   ]);
   const [selectedTags, setSelectedTags] = useState([]);
   const [tagOptions, setTagOptions] = useState([]);
+  const [selectedProjects, setSelectedProjects] = useState([]);
+  const [projectOptions, setProjectOptions] = useState([]);
+  const [groupBy, setGroupBy] = useState('day');
   const [unmatched, setUnmatched] = useState([]);
   const [unmatchedLoading, setUnmatchedLoading] = useState(false);
   const [detailVisible, setDetailVisible] = useState(false);
@@ -57,6 +60,16 @@ const BillingStats = () => {
     }
   };
 
+  const loadProjects = async () => {
+    try {
+      const res = await tagProjectApi.list();
+      const billing = (res.data.data || []).filter((p) => p.type === 'billing');
+      setProjectOptions(billing.map((p) => ({ label: p.name, value: p.id })));
+    } catch {
+      setProjectOptions([]);
+    }
+  };
+
   const loadStats = async (p = 1) => {
     if (!dateRange || dateRange.length !== 2) {
       message.warning('请选择日期范围');
@@ -68,6 +81,8 @@ const BillingStats = () => {
         start_date: dateRange[0].format('YYYY-MM-DD'),
         end_date: dateRange[1].format('YYYY-MM-DD'),
         tags: selectedTags.length ? selectedTags : undefined,
+        project_ids: selectedProjects.length ? selectedProjects : undefined,
+        group_by: groupBy,
         page: p,
         page_size: 20,
       });
@@ -87,6 +102,7 @@ const BillingStats = () => {
       const res = await billingApi.getStatsDetail({
         date: dateStr,
         tags: selectedTags.length ? selectedTags : undefined,
+        project_ids: selectedProjects.length ? selectedProjects : undefined,
         page: p,
         page_size: 20,
       });
@@ -126,6 +142,7 @@ const BillingStats = () => {
 
   useEffect(() => {
     loadTags();
+    loadProjects();
     loadUnmatched();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -140,40 +157,86 @@ const BillingStats = () => {
     loadStats(1);
   };
 
-  const columns = [
-    {
-      title: '日期',
-      dataIndex: 'date',
-      key: 'date',
-      width: 160,
-      render: (date) => (date ? dayjs(date).format('YYYY年MM月DD日') : '-'),
-    },
-    {
-      title: '总数量',
-      dataIndex: 'total_count',
-      key: 'total_count',
-      width: 120,
-    },
-    {
-      title: '当天金额（元）',
-      dataIndex: 'total_amount',
-      key: 'total_amount',
-      width: 140,
-      render: (v) => (v != null ? Number(v).toFixed(3) : '-'),
-    },
-    {
-      title: '操作',
-      key: 'action',
-      width: 100,
-      render: (_, record) => (
-        <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => showDetail(record.date)}>
-          详情
-        </Button>
-      ),
-    },
-  ];
+  useEffect(() => {
+    if (dateRange && dateRange.length === 2) {
+      setPage(1);
+      loadStats(1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupBy]);
+
+  const columnsByMode = {
+    day: [
+      {
+        title: '日期',
+        dataIndex: 'date',
+        key: 'date',
+        width: 160,
+        render: (date) => (date ? dayjs(date).format('YYYY年MM月DD日') : '-'),
+      },
+      { title: '总数量', dataIndex: 'total_count', key: 'total_count', width: 120 },
+      {
+        title: '当天金额（元）',
+        dataIndex: 'total_amount',
+        key: 'total_amount',
+        width: 140,
+        render: (v) => (v != null ? Number(v).toFixed(3) : '-'),
+      },
+      {
+        title: '操作',
+        key: 'action',
+        width: 100,
+        render: (_, record) => (
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => showDetail(record.date)}>
+            详情
+          </Button>
+        ),
+      },
+    ],
+    project: [
+      { title: '项目', dataIndex: 'project_name', key: 'project_name', width: 160, render: (v) => v || '未归属' },
+      { title: '总数量', dataIndex: 'total_count', key: 'total_count', width: 120 },
+      {
+        title: '金额（元）',
+        dataIndex: 'total_amount',
+        key: 'total_amount',
+        width: 140,
+        render: (v) => (v != null ? Number(v).toFixed(3) : '-'),
+      },
+    ],
+    project_day: [
+      { title: '项目', dataIndex: 'project_name', key: 'project_name', width: 120, render: (v) => v || '未归属' },
+      {
+        title: '日期',
+        dataIndex: 'date',
+        key: 'date',
+        width: 140,
+        render: (date) => (date ? dayjs(date).format('YYYY-MM-DD') : '-'),
+      },
+      { title: '数量', dataIndex: 'total_count', key: 'total_count', width: 100 },
+      {
+        title: '金额（元）',
+        dataIndex: 'total_amount',
+        key: 'total_amount',
+        width: 120,
+        render: (v) => (v != null ? Number(v).toFixed(3) : '-'),
+      },
+      {
+        title: '操作',
+        key: 'action',
+        width: 100,
+        render: (_, record) => (
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => showDetail(record.date)}>
+            详情
+          </Button>
+        ),
+      },
+    ],
+  };
+  const columns = columnsByMode[groupBy] || columnsByMode.day;
 
   const detailColumns = [
+    { title: '项目', dataIndex: 'project_name', key: 'project_name', width: 100, render: (v) => (v || '-') },
     { title: '计费类型', dataIndex: 'bill_key', key: 'bill_key', width: 120 },
     { title: '标签', dataIndex: 'tag', key: 'tag', width: 120, render: (v) => (v || '-') },
     { title: '数量', dataIndex: 'count', key: 'count', width: 100 },
@@ -207,12 +270,32 @@ const BillingStats = () => {
           />
           <Select
             mode="multiple"
-            placeholder="按标签筛选（不选=全部）"
+            placeholder="按计费项目筛选"
+            value={selectedProjects}
+            onChange={setSelectedProjects}
+            options={projectOptions}
+            allowClear
+            style={{ minWidth: 160 }}
+          />
+          <Select
+            placeholder="汇总维度"
+            value={groupBy}
+            onChange={setGroupBy}
+            style={{ width: 140 }}
+            options={[
+              { value: 'day', label: '按天' },
+              { value: 'project', label: '按项目' },
+              { value: 'project_day', label: '按项目+按天' },
+            ]}
+          />
+          <Select
+            mode="multiple"
+            placeholder="按标签筛选"
             value={selectedTags}
             onChange={setSelectedTags}
             options={tagOptions}
             allowClear
-            style={{ minWidth: 200 }}
+            style={{ minWidth: 160 }}
           />
           <Button
             type="primary"
@@ -245,14 +328,14 @@ const BillingStats = () => {
         <Table
           columns={columns}
           dataSource={data}
-          rowKey="date"
+          rowKey={(r) => (groupBy === 'project' ? String(r.project_id) : groupBy === 'project_day' ? `${r.project_id}-${r.date}` : r.date)}
           loading={loading}
           pagination={{
             current: page,
             pageSize: 20,
             total: totalDays,
             showSizeChanger: false,
-            showTotal: (t) => `共 ${t} 天`,
+            showTotal: (t) => (groupBy === 'day' ? `共 ${t} 天` : groupBy === 'project' ? `共 ${t} 个项目` : `共 ${t} 条`),
             onChange: (p) => {
               setPage(p);
               loadStats(p);
@@ -326,7 +409,7 @@ const BillingStats = () => {
           size="small"
           columns={detailColumns}
           dataSource={detailData}
-          rowKey={(r) => `${r.date}-${r.bill_key}-${r.tag || ''}`}
+          rowKey={(r) => `${r.project_id || 0}-${r.date}-${r.bill_key}-${r.tag || ''}`}
           loading={detailLoading}
           pagination={
             detailTotal <= 20

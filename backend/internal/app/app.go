@@ -13,6 +13,7 @@ import (
 	"log-manager/internal/database"
 	"log-manager/internal/handler"
 	"log-manager/internal/middleware"
+	"log-manager/internal/requestmetrics"
 	"log-manager/internal/models"
 	"log-manager/internal/rulecache"
 	"log-manager/internal/tagcache"
@@ -153,7 +154,7 @@ func (a *App) initRouter(tagCache *tagcache.Cache, ruleCache *rulecache.Cache, u
 	a.logHandler = handler.NewLogHandler(tagCache, ruleCache, unmatchedQueue, billingConfigCache)
 	logHandler := a.logHandler
 	metricsHandler := handler.NewMetricsHandler()
-	dashboardHandler := handler.NewDashboardHandler()
+	dashboardHandler := handler.NewDashboardHandler(a.cfg)
 	billingHandler := handler.NewBillingHandler(unmatchedQueue)
 	tagHandler := handler.NewTagHandler(tagCache, func() { billingConfigCache.Invalidate() })
 	authHandler := handler.NewAuthHandler(a.cfg)
@@ -183,6 +184,7 @@ func (a *App) initRouter(tagCache *tagcache.Cache, ruleCache *rulecache.Cache, u
 
 	// Agent 上报接口：仅 API Key 认证（与 log-filter-monitor 等客户端通信）
 	agentAPI := api.Group("")
+	agentAPI.Use(requestmetrics.Middleware())
 	if a.cfg.Auth.APIKey != "" {
 		agentAPI.Use(middleware.APIKeyMiddleware(a.cfg.Auth.APIKey))
 	}

@@ -81,6 +81,7 @@ func Init(cfg *config.DatabaseConfig) error {
 		&models.BillingConfig{},
 		&models.BillingEntry{},
 		&models.AgentConfig{},
+		&models.AgentNodeStat{},
 		&models.TagProject{},
 		&models.Tag{},
 		&models.RuleName{},
@@ -90,9 +91,14 @@ func Init(cfg *config.DatabaseConfig) error {
 		return fmt.Errorf("数据库迁移失败: %w", err)
 	}
 
-	// 确保存在唯一的计费项目（Type=billing）
+	// 确保至少存在一个计费项目（Type=billing），允许多个
 	if err := EnsureBillingProject(); err != nil {
 		return fmt.Errorf("初始化计费项目失败: %w", err)
+	}
+
+	// 迁移：为 billing_entries 回填 project_id
+	if err := migrateBillingEntryProjectID(); err != nil {
+		return fmt.Errorf("迁移 billing_entries.project_id 失败: %w", err)
 	}
 
 	// 迁移：为 billing_configs 中 billing_tag 为空的旧数据回填
@@ -171,7 +177,66 @@ func migrateBillingConfigBillingTag() error {
 	return nil
 }
 
-// EnsureBillingProject 确保存在唯一的计费项目，不存在则自动创建
+// migrateBillingEntryProjectID 为 billing_entries 中 project_id 为空的旧数据回填
+// 根据 tag 在 tags 表找到 project_id；若 tag 无项目或项目非 billing，则使用首个 billing 项目 id
+func migrateBillingEntryProjectID() error {
+	var defaultProjectID uint
+	if err := DB.Model(&models.TagProject{}).Where("type = ?", "billing").Limit(1).Pluck("id", &defaultProjectID).Error; err != nil || defaultProjectID == 0 {
+		return nil // 无 billing 项目时跳过
+	}
+
+	// 构建 tag -> project_id 映射（仅 billing 项目的 tag）
+	var tagProjects []struct {
+		TagName   string
+		ProjectID uint
+	}
+	if err := DB.Model(&models.Tag{}).
+		Select("tags.name as tag_name, tags.project_id as project_id").
+		Joins("JOIN tag_projects ON tag_projects.id = tags.project_id AND tag_projects.type = ?", "billing").
+		Where("tags.project_id IS NOT NULL").
+		Scan(&tagProjects).Error; err != nil {
+		return err
+	}
+	tagToProject := make(map[string]uint)
+	for _, tp := range tagProjects {
+		if tp.TagName != "" && tp.ProjectID != 0 {
+			tagToProject[tp.TagName] = tp.ProjectID
+		}
+	}
+
+	for {
+		var entries []models.BillingEntry
+		if err := DB.Where("project_id IS NULL").Limit(200).Find(&entries).Error; err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			break
+		}
+		for _, e := range entries {
+			projectID := defaultProjectID
+			firstTag := strings.TrimSpace(strings.SplitN(e.Tag, ",", 2)[0])
+			if firstTag != "" {
+				if pid, ok := tagToProject[firstTag]; ok {
+					projectID = pid
+				}
+			}
+			if err := DB.Model(&models.BillingEntry{}).Where("id = ?", e.ID).Update("project_id", projectID).Error; err != nil {
+				return err
+			}
+		}
+	}
+
+	// 删除旧唯一索引（若存在），避免与新索引重复
+	switch Type {
+	case "mysql":
+		_ = DB.Exec("ALTER TABLE billing_entries DROP INDEX idx_billing_date_key_tag").Error
+	case "sqlite":
+		_ = DB.Exec("DROP INDEX IF EXISTS idx_billing_date_key_tag").Error
+	}
+	return nil
+}
+
+// EnsureBillingProject 确保至少存在一个计费项目，不存在则自动创建（允许多个计费项目并存）
 func EnsureBillingProject() error {
 	var count int64
 	if err := DB.Model(&models.TagProject{}).Where("type = ?", "billing").Count(&count).Error; err != nil {

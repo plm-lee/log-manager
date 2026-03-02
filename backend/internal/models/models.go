@@ -17,6 +17,7 @@ type LogEntry struct {
 	LogFile   string         `gorm:"size:500" json:"log_file"`               // 日志文件路径
 	Pattern   string         `gorm:"type:text" json:"pattern"`               // 匹配模式
 	Tag       string         `gorm:"index;size:100" json:"tag"`              // 标签（用于区分不同项目）
+	Host      string         `gorm:"index;size:128;default:''" json:"host"`  // 来源服务器/节点名称
 	Source    string         `gorm:"size:20;default:agent" json:"source"`    // 来源：agent / manual
 	CreatedAt time.Time      `json:"created_at"`                             // 创建时间
 	UpdatedAt time.Time      `json:"updated_at"`                             // 更新时间
@@ -69,17 +70,19 @@ func (BillingConfig) TableName() string {
 	return "billing_configs"
 }
 
-// BillingEntry 计费明细聚合（按天+bill_key+tag）
+// BillingEntry 计费明细聚合（按天+bill_key+tag+project_id）
 // 计费日志在接收时直接写入此表，不进入 log_entries，不受保留策略清除
 type BillingEntry struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	Date      string    `gorm:"size:10;not null;uniqueIndex:idx_billing_date_key_tag" json:"date"`   // YYYY-MM-DD
-	BillKey   string    `gorm:"size:100;not null;uniqueIndex:idx_billing_date_key_tag" json:"bill_key"`
-	Tag       string    `gorm:"size:100;default:'';uniqueIndex:idx_billing_date_key_tag" json:"tag"` // 标签（实际日志的 tag）
-	Count     int64     `gorm:"not null" json:"count"`
-	Amount    float64   `gorm:"type:decimal(14,4);not null" json:"amount"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        uint        `gorm:"primaryKey" json:"id"`
+	Date      string      `gorm:"size:10;not null;uniqueIndex:idx_billing_date_key_tag_project" json:"date"`   // YYYY-MM-DD
+	BillKey   string      `gorm:"size:100;not null;uniqueIndex:idx_billing_date_key_tag_project" json:"bill_key"`
+	Tag       string      `gorm:"size:100;default:'';uniqueIndex:idx_billing_date_key_tag_project" json:"tag"` // 标签（实际日志的 tag）
+	ProjectID *uint       `gorm:"uniqueIndex:idx_billing_date_key_tag_project;index" json:"project_id"`       // 归属计费大项目
+	Project   *TagProject `gorm:"foreignKey:ProjectID" json:"project,omitempty"`
+	Count     int64       `gorm:"not null" json:"count"`
+	Amount    float64     `gorm:"type:decimal(14,4);not null" json:"amount"`
+	CreatedAt time.Time   `json:"created_at"`
+	UpdatedAt time.Time   `json:"updated_at"`
 }
 
 // TableName 指定表名
@@ -125,6 +128,17 @@ type RuleName struct {
 
 func (RuleName) TableName() string {
 	return "rule_names"
+}
+
+// AgentNodeStat 子节点统计（按 host 聚合，写入时更新）
+type AgentNodeStat struct {
+	Host           string    `gorm:"size:128;primaryKey" json:"host"`
+	LogCount       int64     `gorm:"not null" json:"log_count"`
+	LastReportedAt time.Time `json:"last_reported_at"`
+}
+
+func (AgentNodeStat) TableName() string {
+	return "agent_node_stats"
 }
 
 // TagLogCount 标签日志数（写入时更新，替代 Group by tag 慢查询）
